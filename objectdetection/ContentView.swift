@@ -647,7 +647,6 @@ extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             requests.append(contoursRequest)
         }
         
-        // Perform Vision requests
         if !requests.isEmpty {
             let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
             
