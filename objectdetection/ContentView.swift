@@ -16,13 +16,48 @@ struct ContentView: View {
                     .padding(.top)
                 
                 VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Show Camera Feed", isOn: $detectionManager.showCameraFeed)
+                        .onChange(of: detectionManager.showCameraFeed) { _ in
+                            detectionManager.updateCameraVisibility()
+                        }
+                    
+                    Divider()
+                    
                     Toggle("Face Detection", isOn: $detectionManager.faceDetectionEnabled)
+                        .onChange(of: detectionManager.faceDetectionEnabled) { enabled in
+                            if !enabled { detectionManager.clearLayer("face") }
+                        }
+                    
                     Toggle("Face Landmarks", isOn: $detectionManager.faceLandmarksEnabled)
+                        .disabled(!detectionManager.faceDetectionEnabled)
+                        .onChange(of: detectionManager.faceLandmarksEnabled) { enabled in
+                            if !enabled { detectionManager.clearLayer("landmarks") }
+                        }
+                    
                     Toggle("Hand Pose", isOn: $detectionManager.handDetectionEnabled)
+                        .onChange(of: detectionManager.handDetectionEnabled) { enabled in
+                            if !enabled { detectionManager.clearLayer("hand") }
+                        }
+                    
                     Toggle("Body Pose", isOn: $detectionManager.bodyDetectionEnabled)
+                        .onChange(of: detectionManager.bodyDetectionEnabled) { enabled in
+                            if !enabled { detectionManager.clearLayer("body") }
+                        }
+                    
                     Toggle("Object Detection (YOLO)", isOn: $detectionManager.objectDetectionEnabled)
+                        .onChange(of: detectionManager.objectDetectionEnabled) { enabled in
+                            if !enabled { detectionManager.clearLayer("object") }
+                        }
+                    
                     Toggle("Text Recognition", isOn: $detectionManager.textDetectionEnabled)
+                        .onChange(of: detectionManager.textDetectionEnabled) { enabled in
+                            if !enabled { detectionManager.clearLayer("text") }
+                        }
+                    
                     Toggle("Contour Detection", isOn: $detectionManager.contourDetectionEnabled)
+                        .onChange(of: detectionManager.contourDetectionEnabled) { enabled in
+                            if !enabled { detectionManager.clearLayer("contour") }
+                        }
                 }
                 .padding(.horizontal)
                 
@@ -41,9 +76,9 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                Button(action: detectionManager.toggleCamera) {
-                    Label(detectionManager.isRunning ? "Stop Camera" : "Start Camera",
-                          systemImage: detectionManager.isRunning ? "stop.circle" : "play.circle")
+                Button(action: detectionManager.toggleDetection) {
+                    Label(detectionManager.isDetecting ? "Stop Detection" : "Start Detection",
+                          systemImage: detectionManager.isDetecting ? "stop.circle" : "play.circle")
                 }
                 .buttonStyle(.borderedProminent)
                 .padding()
@@ -80,18 +115,19 @@ struct CameraView: NSViewRepresentable {
 // MARK: - Detection Manager
 class DetectionManager: NSObject, ObservableObject {
     // Published properties for UI
-    @Published var faceDetectionEnabled = true
+    @Published var showCameraFeed = true
+    @Published var faceDetectionEnabled = false
     @Published var faceLandmarksEnabled = false
     @Published var handDetectionEnabled = false
     @Published var bodyDetectionEnabled = false
-    @Published var objectDetectionEnabled = true
+    @Published var objectDetectionEnabled = false
     @Published var textDetectionEnabled = false
-    @Published var contourDetectionEnabled = false
+    @Published var contourDetectionEnabled = true
     
     @Published var currentFPS: Double = 0
     @Published var detectionCount: Int = 0
     @Published var statusMessage: String = "Ready"
-    @Published var isRunning: Bool = false
+    @Published var isDetecting: Bool = false
     
     // Camera and Vision
     private var captureSession: AVCaptureSession?
@@ -104,6 +140,10 @@ class DetectionManager: NSObject, ObservableObject {
     private var overlayLayer = CALayer()
     private var detectionLayers: [String: CALayer] = [:]
     
+    // Video dimensions for proper coordinate mapping
+    private var videoDimensions: CMVideoDimensions?
+    private var videoOrientation: CGImagePropertyOrientation = .up
+    
     // Vision requests
     private lazy var faceDetectionRequest = VNDetectFaceRectanglesRequest(completionHandler: handleFaceDetection)
     private lazy var faceLandmarksRequest = VNDetectFaceLandmarksRequest(completionHandler: handleFaceLandmarks)
@@ -114,7 +154,7 @@ class DetectionManager: NSObject, ObservableObject {
     
     // YOLO models
     private var yoloRequest: VNCoreMLRequest?
-    private var yoloTinyRequest: VNCoreMLRequest?
+//    private var yoloTinyRequest: VNCoreMLRequest?
     
     // Performance tracking
     private var frameCount = 0
@@ -146,6 +186,10 @@ class DetectionManager: NSObject, ObservableObject {
                 captureSession?.addInput(videoInput)
             }
             
+            // Get video dimensions
+            let formatDescription = videoCaptureDevice.activeFormat.formatDescription
+            videoDimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
+            
             videoDataOutput = AVCaptureVideoDataOutput()
             videoDataOutput?.alwaysDiscardsLateVideoFrames = true
             videoDataOutput?.setSampleBufferDelegate(self, queue: videoDataOutputQueue)
@@ -154,20 +198,21 @@ class DetectionManager: NSObject, ObservableObject {
                 captureSession?.addOutput(videoDataOutput!)
             }
             
+            // Setup preview layer
             videoPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession!)
-            videoPreviewLayer?.videoGravity = .resizeAspectFill
+            videoPreviewLayer?.videoGravity = .resizeAspect  // Changed to maintain aspect ratio
             videoPreviewLayer?.frame = view.bounds
             videoPreviewLayer?.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
             
             view.layer?.addSublayer(videoPreviewLayer!)
             
-            // Setup overlay layer with autoresizing
+            // Setup overlay layer
             overlayLayer.frame = view.bounds
             overlayLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
             view.layer?.addSublayer(overlayLayer)
             
-            // Create detection layers with autoresizing
-            let layerNames = ["face", "hand", "body", "object", "text", "contour"]
+            // Create detection layers
+            let layerNames = ["face", "landmarks", "hand", "body", "object", "text", "contour"]
             for name in layerNames {
                 let layer = CALayer()
                 layer.frame = view.bounds
@@ -176,15 +221,14 @@ class DetectionManager: NSObject, ObservableObject {
                 overlayLayer.addSublayer(layer)
             }
             
-            // Store reference to view for coordinate calculations
+            // Store reference to view
             self.previewView = view
             
-            // Start camera
+            // Start camera session
             DispatchQueue.global(qos: .background).async { [weak self] in
                 self?.captureSession?.startRunning()
                 DispatchQueue.main.async {
-                    self?.isRunning = true
-                    self?.updateStatus("Camera running")
+                    self?.updateStatus("Camera ready")
                 }
             }
             
@@ -199,10 +243,10 @@ class DetectionManager: NSObject, ObservableObject {
         faceLandmarksRequest.revision = VNDetectFaceLandmarksRequestRevision3
         
         // Configure hand pose
-        handPoseRequest.maximumHandCount = 2
+        handPoseRequest.maximumHandCount = 16
         
         // Configure text detection
-        textDetectionRequest.recognitionLevel = .accurate
+        textDetectionRequest.recognitionLevel = .fast
         textDetectionRequest.usesLanguageCorrection = true
         
         // Configure contours
@@ -212,34 +256,64 @@ class DetectionManager: NSObject, ObservableObject {
     
     private func setupYOLOModels() {
         // Load YOLOv3
-        if let modelURL = Bundle.main.url(forResource: "YOLOv3", withExtension: "mlmodelc") {
+        if let modelURL = Bundle.main.url(forResource: "YOLOv3TinyFP16", withExtension: "mlmodelc") {
             do {
                 let model = try MLModel(contentsOf: modelURL)
                 let visionModel = try VNCoreMLModel(for: model)
                 yoloRequest = VNCoreMLRequest(model: visionModel, completionHandler: handleObjectDetection)
                 yoloRequest?.imageCropAndScaleOption = .scaleFit
-                updateStatus("YOLOv3 loaded")
+                updateStatus("YOLOv3TinyFP16 loaded")
             } catch {
-                print("Error loading YOLOv3: \(error)")
+                print("Error loading YOLOv3TinyFP16: \(error)")
             }
         }
         
-        // Load YOLOv3Tiny for faster performance (optional)
-        if let modelURL = Bundle.main.url(forResource: "YOLOv3TinyFP16", withExtension: "mlmodelc") {
-            do {
-                let model = try MLModel(contentsOf: modelURL)
-                let visionModel = try VNCoreMLModel(for: model)
-                yoloTinyRequest = VNCoreMLRequest(model: visionModel, completionHandler: handleObjectDetection)
-                yoloTinyRequest?.imageCropAndScaleOption = .scaleFit
-            } catch {
-                print("Error loading YOLOv3Tiny: \(error)")
+//        // Load YOLOv3Tiny
+//        if let modelURL = Bundle.main.url(forResource: "YOLOv3TinyFP16", withExtension: "mlmodelc") {
+//            do {
+//                let model = try MLModel(contentsOf: modelURL)
+//                let visionModel = try VNCoreMLModel(for: model)
+//                yoloTinyRequest = VNCoreMLRequest(model: visionModel, completionHandler: handleObjectDetection)
+//                yoloTinyRequest?.imageCropAndScaleOption = .scaleFit
+//            } catch {
+//                print("Error loading YOLOv3Tiny: \(error)")
+//            }
+//        }
+    }
+    
+    // MARK: - Camera Control
+    
+    func updateCameraVisibility() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.videoPreviewLayer?.isHidden = !self.showCameraFeed
+        }
+    }
+    
+    func toggleDetection() {
+        isDetecting.toggle()
+        updateStatus(isDetecting ? "Detection started" : "Detection stopped")
+        
+        if !isDetecting {
+            // Clear all detection layers when stopping
+            for (name, _) in detectionLayers {
+                clearLayer(name)
             }
+        }
+    }
+    
+    func clearLayer(_ name: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let layer = self?.detectionLayers[name] else { return }
+            layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            self?.updateDetectionCount()
         }
     }
     
     // MARK: - Vision Request Handlers
     
     private func handleFaceDetection(request: VNRequest, error: Error?) {
+        guard faceDetectionEnabled else { return }
         guard let results = request.results as? [VNFaceObservation] else { return }
         
         DispatchQueue.main.async { [weak self] in
@@ -256,11 +330,13 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func handleFaceLandmarks(request: VNRequest, error: Error?) {
+        guard faceLandmarksEnabled else { return }
         guard let results = request.results as? [VNFaceObservation] else { return }
         
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let layer = self.detectionLayers["face"]!
+            let layer = self.detectionLayers["landmarks"]!
+            layer.sublayers?.forEach { $0.removeFromSuperlayer() }
             
             for face in results {
                 if let landmarks = face.landmarks {
@@ -271,6 +347,7 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func handleHandPose(request: VNRequest, error: Error?) {
+        guard handDetectionEnabled else { return }
         guard let results = request.results as? [VNHumanHandPoseObservation] else { return }
         
         DispatchQueue.main.async { [weak self] in
@@ -292,6 +369,7 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func handleBodyPose(request: VNRequest, error: Error?) {
+        guard bodyDetectionEnabled else { return }
         guard let results = request.results as? [VNHumanBodyPoseObservation] else { return }
         
         DispatchQueue.main.async { [weak self] in
@@ -313,23 +391,19 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func handleObjectDetection(request: VNRequest, error: Error?) {
+        guard objectDetectionEnabled else { return }
         guard let results = request.results as? [VNRecognizedObjectObservation] else { return }
-        
-        if !results.isEmpty {
-            print("Detected \(results.count) objects")
-        }
         
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let layer = self.detectionLayers["object"]!
             layer.sublayers?.forEach { $0.removeFromSuperlayer() }
             
-            for object in results where object.confidence > 0.3 {
+            for object in results where object.confidence > 0.1 {
                 let label = object.labels.first?.identifier ?? "Unknown"
                 let confidence = object.labels.first?.confidence ?? 0
                 let text = "\(label): \(String(format: "%.2f", confidence))"
                 
-                print("Drawing object: \(text) at \(object.boundingBox)")
                 self.drawBoundingBox(object.boundingBox, in: layer, color: .systemBlue, label: text)
             }
             
@@ -338,6 +412,7 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func handleTextDetection(request: VNRequest, error: Error?) {
+        guard textDetectionEnabled else { return }
         guard let results = request.results as? [VNRecognizedTextObservation] else { return }
         
         DispatchQueue.main.async { [weak self] in
@@ -357,6 +432,7 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func handleContours(request: VNRequest, error: Error?) {
+        guard contourDetectionEnabled else { return }
         guard let result = request.results?.first as? VNContoursObservation else { return }
         
         DispatchQueue.main.async { [weak self] in
@@ -366,13 +442,12 @@ class DetectionManager: NSObject, ObservableObject {
             
             let path = CGMutablePath()
             
-            for contourIndex in 0..<min(result.contourCount, 10) { // Limit contours for performance
+            for contourIndex in 0..<min(result.contourCount, 300) { //Limit Contours for optimisation
                 if let contour = try? result.contour(at: contourIndex) {
                     let points = contour.normalizedPoints
                     
                     for (index, point) in points.enumerated() {
-                        // Convert SIMD2<Float> to CGPoint
-                        let cgPoint = self.normalizedPointToLayerPoint(CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)))
+                        let cgPoint = self.convertNormalizedPoint(CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)))
                         
                         if index == 0 {
                             path.move(to: cgPoint)
@@ -387,18 +462,67 @@ class DetectionManager: NSObject, ObservableObject {
             shapeLayer.path = path
             shapeLayer.fillColor = NSColor.clear.cgColor
             shapeLayer.strokeColor = NSColor.systemCyan.cgColor
-            shapeLayer.lineWidth = 1.0
+            shapeLayer.lineWidth = 3.0
             layer.addSublayer(shapeLayer)
             
             self.updateDetectionCount()
         }
     }
     
+    // MARK: - Coordinate Conversion (Fixed for aspect ratio)
+    
+    private func convertNormalizedRect(_ rect: CGRect) -> CGRect {
+        guard let previewLayer = videoPreviewLayer,
+              let view = previewView else { return .zero }
+        
+        // Get the actual video rect within the preview layer (accounts for aspect ratio)
+        let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        
+        // Convert normalized coordinates to the video rect coordinates
+        return CGRect(
+            x: videoRect.minX + rect.minX * videoRect.width,
+            y: videoRect.minY + rect.minY * videoRect.height,
+            width: rect.width * videoRect.width,
+            height: rect.height * videoRect.height
+        )
+    }
+    
+    private func convertNormalizedPoint(_ point: CGPoint) -> CGPoint {
+        guard let previewLayer = videoPreviewLayer else { return .zero }
+        
+        // Get the actual video rect within the preview layer
+        let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        
+        // Convert normalized point to the video rect coordinates
+        return CGPoint(
+            x: videoRect.minX + point.x * videoRect.width,
+            y: videoRect.minY + point.y * videoRect.height
+        )
+    }
+    
+    private func convertNormalizedPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        guard let previewLayer = videoPreviewLayer else { return .zero }
+        
+        // Get the actual video rect within the preview layer
+        let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        
+        // Convert the bounding box rect first
+        let convertedRect = convertNormalizedRect(rect)
+        
+        // Then convert the point within that rect
+        return CGPoint(
+            x: convertedRect.minX + point.x * convertedRect.width,
+            y: convertedRect.minY + point.y * convertedRect.height
+        )
+    }
+    
     // MARK: - Drawing Methods
     
     private func drawBoundingBox(_ rect: CGRect, in layer: CALayer, color: NSColor, label: String? = nil) {
+        let convertedRect = convertNormalizedRect(rect)
+        
         let box = CALayer()
-        box.frame = denormalizeRect(rect)
+        box.frame = convertedRect
         box.borderColor = color.cgColor
         box.borderWidth = 2.0
         box.cornerRadius = 4.0
@@ -415,7 +539,7 @@ class DetectionManager: NSObject, ObservableObject {
             textLayer.contentsScale = 2.0
             
             let size = label.size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)])
-            textLayer.frame = CGRect(x: box.frame.minX, y: box.frame.minY - size.height - 2,
+            textLayer.frame = CGRect(x: convertedRect.minX, y: convertedRect.minY - size.height - 2,
                                     width: size.width + 10, height: size.height + 4)
             layer.addSublayer(textLayer)
         }
@@ -437,9 +561,8 @@ class DetectionManager: NSObject, ObservableObject {
             let points = feature.normalizedPoints
             
             for (index, point) in points.enumerated() {
-                // Convert SIMD2<Float> to CGPoint and denormalize
                 let normalizedPoint = CGPoint(x: CGFloat(point.x), y: CGFloat(point.y))
-                let cgPoint = denormalizePoint(normalizedPoint, in: boundingBox)
+                let cgPoint = convertNormalizedPoint(normalizedPoint, in: boundingBox)
                 
                 if index == 0 {
                     path.move(to: cgPoint)
@@ -460,7 +583,7 @@ class DetectionManager: NSObject, ObservableObject {
     private func drawHandSkeleton(_ points: [VNHumanHandPoseObservation.JointName : VNRecognizedPoint], in layer: CALayer) {
         // Draw joints
         for (_, point) in points where point.confidence > 0.3 {
-            let cgPoint = normalizedPointToLayerPoint(CGPoint(x: point.location.x, y: point.location.y))
+            let cgPoint = convertNormalizedPoint(CGPoint(x: point.location.x, y: point.location.y))
             
             let circle = CALayer()
             circle.frame = CGRect(x: cgPoint.x - 3, y: cgPoint.y - 3, width: 6, height: 6)
@@ -483,8 +606,8 @@ class DetectionManager: NSObject, ObservableObject {
                point1.confidence > 0.3 && point2.confidence > 0.3 {
                 
                 let path = CGMutablePath()
-                path.move(to: normalizedPointToLayerPoint(CGPoint(x: point1.location.x, y: point1.location.y)))
-                path.addLine(to: normalizedPointToLayerPoint(CGPoint(x: point2.location.x, y: point2.location.y)))
+                path.move(to: convertNormalizedPoint(CGPoint(x: point1.location.x, y: point1.location.y)))
+                path.addLine(to: convertNormalizedPoint(CGPoint(x: point2.location.x, y: point2.location.y)))
                 
                 let line = CAShapeLayer()
                 line.path = path
@@ -498,7 +621,7 @@ class DetectionManager: NSObject, ObservableObject {
     private func drawBodySkeleton(_ points: [VNHumanBodyPoseObservation.JointName : VNRecognizedPoint], in layer: CALayer) {
         // Draw joints
         for (_, point) in points where point.confidence > 0.3 {
-            let cgPoint = normalizedPointToLayerPoint(CGPoint(x: point.location.x, y: point.location.y))
+            let cgPoint = convertNormalizedPoint(CGPoint(x: point.location.x, y: point.location.y))
             
             let circle = CALayer()
             circle.frame = CGRect(x: cgPoint.x - 4, y: cgPoint.y - 4, width: 8, height: 8)
@@ -522,8 +645,8 @@ class DetectionManager: NSObject, ObservableObject {
                point1.confidence > 0.3 && point2.confidence > 0.3 {
                 
                 let path = CGMutablePath()
-                path.move(to: normalizedPointToLayerPoint(CGPoint(x: point1.location.x, y: point1.location.y)))
-                path.addLine(to: normalizedPointToLayerPoint(CGPoint(x: point2.location.x, y: point2.location.y)))
+                path.move(to: convertNormalizedPoint(CGPoint(x: point1.location.x, y: point1.location.y)))
+                path.addLine(to: convertNormalizedPoint(CGPoint(x: point2.location.x, y: point2.location.y)))
                 
                 let line = CAShapeLayer()
                 line.path = path
@@ -534,53 +657,7 @@ class DetectionManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Coordinate Conversion
-    
-    private func denormalizeRect(_ rect: CGRect) -> CGRect {
-        guard let view = previewView else { return .zero }
-        let size = view.bounds.size
-        // Don't flip Y coordinate for macOS
-        return CGRect(
-            x: rect.minX * size.width,
-            y: rect.minY * size.height,
-            width: rect.width * size.width,
-            height: rect.height * size.height
-        )
-    }
-    
-    private func denormalizePoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
-        guard let view = previewView else { return .zero }
-        let size = view.bounds.size
-        // Don't flip Y coordinate for macOS
-        let x = (rect.minX + point.x * rect.width) * size.width
-        let y = (rect.minY + point.y * rect.height) * size.height
-        return CGPoint(x: x, y: y)
-    }
-    
-    private func normalizedPointToLayerPoint(_ point: CGPoint) -> CGPoint {
-        guard let view = previewView else { return .zero }
-        let size = view.bounds.size
-        // Don't flip Y coordinate for macOS
-        return CGPoint(x: point.x * size.width, y: point.y * size.height)
-    }
-    
-    // MARK: - Control Methods
-    
-    func toggleCamera() {
-        if isRunning {
-            captureSession?.stopRunning()
-            isRunning = false
-            updateStatus("Camera stopped")
-        } else {
-            DispatchQueue.global(qos: .background).async { [weak self] in
-                self?.captureSession?.startRunning()
-                DispatchQueue.main.async {
-                    self?.isRunning = true
-                    self?.updateStatus("Camera running")
-                }
-            }
-        }
-    }
+    // MARK: - Utility Methods
     
     private func updateStatus(_ message: String) {
         DispatchQueue.main.async {
@@ -613,6 +690,9 @@ class DetectionManager: NSObject, ObservableObject {
 extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        // Always process frames for detection, regardless of camera visibility
+        guard isDetecting else { return }
+        
         frameCount += 1
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -647,6 +727,7 @@ extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             requests.append(contoursRequest)
         }
         
+        // Perform Vision requests
         if !requests.isEmpty {
             let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
             
