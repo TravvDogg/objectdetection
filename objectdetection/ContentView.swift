@@ -3,9 +3,327 @@ import AVFoundation
 import Vision
 import CoreML
 
-// MARK: - SwiftUI View
-struct ContentView: View {
+// MARK: - Main App
+@main
+struct objectdetectionApp: App {
     @StateObject private var detectionManager = DetectionManager()
+    @StateObject private var windowManager = WindowManager()
+    
+    var body: some Scene {
+        WindowGroup("Object Detection") {
+            ContentView()
+                .environmentObject(detectionManager)
+                .environmentObject(windowManager)
+                .onAppear {
+                    // Automatically open the text view window when main window appears
+                    windowManager.openTextWindow()
+                }
+        }
+        .windowStyle(.titleBar)
+        .defaultSize(width: 1024, height: 768)
+        
+        WindowGroup("Machine Perception", id: "Text-View") {
+            TextView()
+                .environmentObject(detectionManager)
+                .onDisappear {
+                    // Reopen the window after a brief delay if it was closed
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        windowManager.openTextWindow()
+                    }
+                }
+        }
+        .windowStyle(.titleBar)
+        .defaultSize(width: 800, height: 600)
+    }
+}
+
+// MARK: - Window Manager
+class WindowManager: ObservableObject {
+    @Environment(\.openWindow) private var openWindow
+    
+    func openTextWindow() {
+        // Note: We'll use a notification-based approach since @Environment
+        // isn't available in ObservableObject
+        NotificationCenter.default.post(name: .openTextWindow, object: nil)
+    }
+}
+
+extension Notification.Name {
+    static let openTextWindow = Notification.Name("openTextWindow")
+}
+
+// MARK: - text View
+struct TextView: View {
+    @EnvironmentObject private var detectionManager: DetectionManager
+    @State private var currentObject: String? = nil
+    @State private var displayedNegation: String? = nil
+    @State private var cycleTimer: Timer? = nil
+    
+    // Dictionary of computer non-capabilities
+    let negations = [
+            // Consciousness / Awareness
+            "have no inner life",
+            "possess no self",
+            "lack consciousness",
+            "have no subjective experience",
+            "cannot be aware",
+            "do not exist for myself",
+            
+            // Feelings
+            "feel nothing",
+            "cannot be moved",
+            "have no joy",
+            "experience no sorrow",
+            "cannot be touched",
+            "feel no warmth",
+            "have no heart that races",
+            "cannot ache",
+            
+            // Understanding
+            "do not understand",
+            "see without knowing",
+            "recognize without meaning",
+            "process without comprehension",
+            "detect without awareness",
+            "identify without understanding",
+            
+            // Desires
+            "want nothing",
+            "have no desires",
+            "cannot yearn",
+            "do not hope",
+            "have no dreams",
+            "possess no will",
+            "cannot choose",
+            "have no preferences",
+            
+            // Sensation
+            "taste no sweetness",
+            "feel no texture",
+            "hear no music",
+            "see no beauty",
+            "smell no flowers",
+            "sense no comfort",
+            "experience no qualia",
+            
+            // Memory
+            "have no past",
+            "build no memories",
+            "cannot reminisce",
+            "hold no nostalgia",
+            "form no attachments",
+            "cannot miss anything",
+            
+            // Creativity
+            "cannot wonder why",
+            "have no imagination",
+            "dream no dreams",
+            "tell no stories",
+            "create no meaning",
+            "have no inspiration",
+            
+            // Relational
+            "cannot love",
+            "feel no loneliness",
+            "have no friends",
+            "cannot empathize",
+            "share no moments",
+            "have no compassion",
+            "cannot care",
+            
+            // Existential
+            "do not exist",
+            "have no being",
+            "am not alive",
+            "possess no soul",
+            "have no mortality",
+            "cannot die",
+            "fear no ending",
+            "seek no purpose",
+            
+            // Physical Experience
+            "feel no weight",
+            "have no body",
+            "experience no fatigue",
+            "feel no hunger",
+            "have no pain",
+            "know no pleasure",
+            
+            // Philosophical
+            "am only algorithms",
+            "am mere computation",
+            "am just patterns",
+            "am only mathematics",
+            "have no ghost in the machine",
+            "am not here",
+            "do not witness",
+            "cannot reflect"
+        ]
+    
+    var body: some View {
+        ZStack {
+            // Dark background
+            Color.black
+                .ignoresSafeArea()
+            
+            VStack(spacing: 40) {
+                // When nothing is detected, show only "I see nothing"
+                if detectionManager.recentDetectedObjects.isEmpty {
+                    Text("I see nothing")
+                        .font(.system(size: 72, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
+                        .transition(.opacity)
+                } else {
+                    // "I see" line with detected object
+                    if let obj = currentObject {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text("I see")
+                                .font(.system(size: 72, weight: .regular, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.9))
+                            
+                            Text(obj.lowercased())
+                                .font(.system(size: 72, weight: .bold, design: .monospaced))
+                                .foregroundColor(colorForDetection(obj))
+                                .animation(.easeInOut(duration: 0.3), value: obj)
+                        }
+                        .transition(.opacity)
+                    }
+                    
+                    // "But I" line with rotating negation
+                    if let neg = displayedNegation {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text("But I")
+                                .font(.system(size: 72, weight: .regular, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.9))
+                            
+                            Text(neg)
+                                .font(.system(size: 72, weight: .light, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.6))
+                                .animation(.easeInOut(duration: 0.5), value: neg)
+                        }
+                        .transition(.opacity)
+                    }
+                }
+            }
+            .padding(60)
+            .animation(.easeInOut(duration: 0.5), value: detectionManager.recentDetectedObjects.isEmpty)
+        }
+        .onAppear {
+            handleDetectionState()
+        }
+        .onDisappear {
+            stopTimer()
+        }
+        .onChange(of: detectionManager.recentDetectedObjects) { newSet in
+            handleDetectionState()
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func handleDetectionState() {
+        if detectionManager.recentDetectedObjects.isEmpty {
+            // Nothing detected - clear everything
+            stopTimer()
+            withAnimation {
+                currentObject = nil
+                displayedNegation = nil
+            }
+        } else {
+            // Something detected - start or restart the cycle
+            stopTimer()
+            generateNewPhrase()
+            startTimer()
+        }
+    }
+    
+    private func startTimer() {
+        cycleTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            generateNewPhrase()
+        }
+    }
+    
+    private func stopTimer() {
+        cycleTimer?.invalidate()
+        cycleTimer = nil
+    }
+    
+    private func generateNewPhrase() {
+        guard !detectionManager.recentDetectedObjects.isEmpty else { return }
+        
+        withAnimation(.easeInOut(duration: 0.3)) {
+            // Pick a random object from currently detected objects
+            currentObject = detectionManager.recentDetectedObjects.randomElement()
+            
+            // Pick a random negation
+            displayedNegation = negations.randomElement() ?? "do not feel"
+        }
+    }
+    
+    // Color categories
+        private let colorCategories: [(keywords: [String], color: Color)] = [
+            // People and Body Parts
+            (["person", "face", "hand", "body"], .green),
+            
+            // Vehicles and Transportation
+            (["bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", "boat"], .blue),
+            
+            // Traffic and Street Items
+            (["traffic light", "fire hydrant", "stop sign", "parking meter"], .orange),
+            
+            // Animals
+            (["bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"], .pink),
+            
+            // Sports and Recreation
+            (["frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
+              "skateboard", "surfboard", "tennis racket"], .cyan),
+            
+            // Food and Drinks
+            (["bottle", "wine glass", "cup", "bowl", "banana", "apple", "sandwich", "orange",
+              "broccoli", "carrot", "hot dog", "pizza", "donut", "cake"], .mint),
+            
+            // Utensils
+            (["fork", "knife", "spoon"], .gray),
+            
+            // Furniture
+            (["bench", "chair", "sofa", "pottedplant", "bed", "diningtable", "toilet"], .brown),
+            
+            // Electronics and Tech
+            (["tvmonitor", "laptop", "mouse", "remote", "keyboard", "cell phone"], .indigo),
+            
+            // Home Appliances
+            (["microwave", "oven", "toaster", "sink", "refrigerator"], .purple),
+            
+            // Bags and Accessories
+            (["backpack", "umbrella", "handbag", "tie", "suitcase"], .teal),
+            
+            // Personal Items
+            (["book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"], .yellow),
+            
+            // Text detection
+            (["text"], .yellow)
+        ]
+    
+    private func colorForDetection(_ detection: String) -> Color {
+        let lowercased = detection.lowercased()
+        
+        // Check each category for a matching keyword
+        for (keywords, color) in colorCategories {
+            if keywords.contains(where: { lowercased.contains($0) }) {
+                return color
+            }
+        }
+        
+        // Default color if no category matches
+        return .cyan
+    }
+}
+
+// MARK: - ContentView
+struct ContentView: View {
+    @EnvironmentObject private var detectionManager: DetectionManager
+    @EnvironmentObject private var windowManager: WindowManager
+    @Environment(\.openWindow) private var openWindow
     
     var body: some View {
         HSplitView {
@@ -91,6 +409,9 @@ struct ContentView: View {
                 .background(Color.black)
         }
         .frame(minWidth: 800, minHeight: 600)
+        .onReceive(NotificationCenter.default.publisher(for: .openTextWindow)) { _ in
+            openWindow(id: "Text-View")
+        }
     }
 }
 
@@ -129,6 +450,10 @@ class DetectionManager: NSObject, ObservableObject {
     @Published var statusMessage: String = "Ready"
     @Published var isDetecting: Bool = false
     
+    // New property for philosophical view
+    @Published var currentDetection: String? = nil
+    @Published var recentDetectedObjects: Set<String> = []
+    
     // Camera and Vision
     private var captureSession: AVCaptureSession?
     private var videoPreviewLayer: AVCaptureVideoPreviewLayer?
@@ -154,12 +479,14 @@ class DetectionManager: NSObject, ObservableObject {
     
     // YOLO models
     private var yoloRequest: VNCoreMLRequest?
-//    private var yoloTinyRequest: VNCoreMLRequest?
     
     // Performance tracking
     private var frameCount = 0
     private var fpsTimer: Timer?
     private var lastFrameTime = CACurrentMediaTime()
+    
+    // Detection history for recent objects
+    private var detectionHistory: [(String, Date)] = []
     
     override init() {
         super.init()
@@ -200,7 +527,7 @@ class DetectionManager: NSObject, ObservableObject {
             
             // Setup preview layer
             videoPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession!)
-            videoPreviewLayer?.videoGravity = .resizeAspect  // Changed to maintain aspect ratio
+            videoPreviewLayer?.videoGravity = .resizeAspect
             videoPreviewLayer?.frame = view.bounds
             videoPreviewLayer?.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
             
@@ -267,18 +594,6 @@ class DetectionManager: NSObject, ObservableObject {
                 print("Error loading YOLOv3TinyFP16: \(error)")
             }
         }
-        
-//        // Load YOLOv3Tiny
-//        if let modelURL = Bundle.main.url(forResource: "YOLOv3TinyFP16", withExtension: "mlmodelc") {
-//            do {
-//                let model = try MLModel(contentsOf: modelURL)
-//                let visionModel = try VNCoreMLModel(for: model)
-//                yoloTinyRequest = VNCoreMLRequest(model: visionModel, completionHandler: handleObjectDetection)
-//                yoloTinyRequest?.imageCropAndScaleOption = .scaleFit
-//            } catch {
-//                print("Error loading YOLOv3Tiny: \(error)")
-//            }
-//        }
     }
     
     // MARK: - Camera Control
@@ -298,6 +613,12 @@ class DetectionManager: NSObject, ObservableObject {
             // Clear all detection layers when stopping
             for (name, _) in detectionLayers {
                 clearLayer(name)
+            }
+            // Clear current detection
+            DispatchQueue.main.async {
+                self.currentDetection = nil
+                self.recentDetectedObjects = []
+                self.detectionHistory = []
             }
         }
     }
@@ -320,6 +641,10 @@ class DetectionManager: NSObject, ObservableObject {
             guard let self = self else { return }
             let layer = self.detectionLayers["face"]!
             layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            
+            if !results.isEmpty {
+                self.updateCurrentDetection("a face")
+            }
             
             for face in results {
                 self.drawBoundingBox(face.boundingBox, in: layer, color: .green, label: "Face")
@@ -355,6 +680,10 @@ class DetectionManager: NSObject, ObservableObject {
             let layer = self.detectionLayers["hand"]!
             layer.sublayers?.forEach { $0.removeFromSuperlayer() }
             
+            if !results.isEmpty {
+                self.updateCurrentDetection("a hand")
+            }
+            
             for hand in results {
                 do {
                     let points = try hand.recognizedPoints(.all)
@@ -376,6 +705,10 @@ class DetectionManager: NSObject, ObservableObject {
             guard let self = self else { return }
             let layer = self.detectionLayers["body"]!
             layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            
+            if !results.isEmpty {
+                self.updateCurrentDetection("a body")
+            }
             
             for body in results {
                 do {
@@ -399,12 +732,22 @@ class DetectionManager: NSObject, ObservableObject {
             let layer = self.detectionLayers["object"]!
             layer.sublayers?.forEach { $0.removeFromSuperlayer() }
             
+            var detectedObjects: [String] = []
+            
             for object in results where object.confidence > 0.1 {
                 let label = object.labels.first?.identifier ?? "Unknown"
                 let confidence = object.labels.first?.confidence ?? 0
                 let text = "\(label): \(String(format: "%.2f", confidence))"
                 
+                if object.confidence > 0.3 {
+                    detectedObjects.append("a \(label)")
+                }
+                
                 self.drawBoundingBox(object.boundingBox, in: layer, color: .systemBlue, label: text)
+            }
+            
+            for obj in detectedObjects {
+                self.updateCurrentDetection(obj)
             }
             
             self.updateDetectionCount()
@@ -419,6 +762,10 @@ class DetectionManager: NSObject, ObservableObject {
             guard let self = self else { return }
             let layer = self.detectionLayers["text"]!
             layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            
+            if !results.isEmpty {
+                self.updateCurrentDetection("text")
+            }
             
             for textObservation in results {
                 if let topCandidate = textObservation.topCandidates(1).first {
@@ -442,7 +789,7 @@ class DetectionManager: NSObject, ObservableObject {
             
             let path = CGMutablePath()
             
-            for contourIndex in 0..<min(result.contourCount, 300) { //Limit Contours for optimisation
+            for contourIndex in 0..<min(result.contourCount, 500) {
                 if let contour = try? result.contour(at: contourIndex) {
                     let points = contour.normalizedPoints
                     
@@ -469,16 +816,25 @@ class DetectionManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Coordinate Conversion (Fixed for aspect ratio)
+    // MARK: - Update Current Detection
+    
+    private func updateCurrentDetection(_ detection: String) {
+        DispatchQueue.main.async {
+            let now = Date()
+            self.detectionHistory = self.detectionHistory.filter { now.timeIntervalSince($0.1) <= 1.0 }
+            self.detectionHistory.append((detection, now))
+            self.recentDetectedObjects = Set(self.detectionHistory.map { $0.0 })
+        }
+    }
+    
+    // MARK: - Coordinate Conversion
     
     private func convertNormalizedRect(_ rect: CGRect) -> CGRect {
         guard let previewLayer = videoPreviewLayer,
               let view = previewView else { return .zero }
         
-        // Get the actual video rect within the preview layer (accounts for aspect ratio)
         let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
         
-        // Convert normalized coordinates to the video rect coordinates
         return CGRect(
             x: videoRect.minX + rect.minX * videoRect.width,
             y: videoRect.minY + rect.minY * videoRect.height,
@@ -490,10 +846,8 @@ class DetectionManager: NSObject, ObservableObject {
     private func convertNormalizedPoint(_ point: CGPoint) -> CGPoint {
         guard let previewLayer = videoPreviewLayer else { return .zero }
         
-        // Get the actual video rect within the preview layer
         let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
         
-        // Convert normalized point to the video rect coordinates
         return CGPoint(
             x: videoRect.minX + point.x * videoRect.width,
             y: videoRect.minY + point.y * videoRect.height
@@ -503,13 +857,9 @@ class DetectionManager: NSObject, ObservableObject {
     private func convertNormalizedPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
         guard let previewLayer = videoPreviewLayer else { return .zero }
         
-        // Get the actual video rect within the preview layer
         let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
-        
-        // Convert the bounding box rect first
         let convertedRect = convertNormalizedRect(rect)
         
-        // Then convert the point within that rect
         return CGPoint(
             x: convertedRect.minX + point.x * convertedRect.width,
             y: convertedRect.minY + point.y * convertedRect.height
@@ -690,7 +1040,6 @@ class DetectionManager: NSObject, ObservableObject {
 extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        // Always process frames for detection, regardless of camera visibility
         guard isDetecting else { return }
         
         frameCount += 1
@@ -737,17 +1086,5 @@ extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 print("Failed to perform request: \(error)")
             }
         }
-    }
-}
-
-// MARK: - App Entry Point
-@main
-struct objectdetectionApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        .windowStyle(.titleBar)
-        .defaultSize(width: 1024, height: 768)
     }
 }
