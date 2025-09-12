@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import Vision
 import CoreML
+import UniformTypeIdentifiers
 
 // MARK: - Main App
 @main
@@ -28,7 +29,7 @@ struct objectdetectionApp: App {
                 .onDisappear {
                     // Reopen the window after a brief delay if it was closed
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        windowManager.openTextWindow()
+//                        windowManager.openTextWindow()
                     }
                 }
         }
@@ -50,6 +51,13 @@ class WindowManager: ObservableObject {
 
 extension Notification.Name {
     static let openTextWindow = Notification.Name("openTextWindow")
+}
+
+// MARK: - Media Source Type
+enum MediaSourceType {
+    case camera
+    case video
+    case image
 }
 
 // MARK: - text View
@@ -324,17 +332,67 @@ struct ContentView: View {
     @EnvironmentObject private var detectionManager: DetectionManager
     @EnvironmentObject private var windowManager: WindowManager
     @Environment(\.openWindow) private var openWindow
+    @State private var showingCameraPicker = false
+    @State private var showingFilePicker = false
     
     var body: some View {
         HSplitView {
             // Left Panel - Controls
             VStack(alignment: .leading, spacing: 20) {
-                Text("Detection Controls")
+                Text("Media Source")
                     .font(.headline)
                     .padding(.top)
                 
                 VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Show Camera Feed", isOn: $detectionManager.showCameraFeed)
+                    HStack {
+                        Button("Select Camera") {
+                            showingCameraPicker = true
+                        }
+                        .buttonStyle(.bordered)
+                        
+                        Button("Load Media File") {
+                            showingFilePicker = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    
+                    if detectionManager.mediaSourceType == .camera {
+                        Text("Source: \(detectionManager.selectedCameraName)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if detectionManager.mediaSourceType == .video {
+                        Text("Source: Video File")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if detectionManager.mediaSourceType == .image {
+                        Text("Source: Image File")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    if detectionManager.mediaSourceType == .video {
+                        HStack {
+                            Button(detectionManager.isVideoPlaying ? "Pause" : "Play") {
+                                detectionManager.toggleVideoPlayback()
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button("Restart") {
+                                detectionManager.restartVideo()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                
+                Divider()
+                
+                Text("Detection Controls")
+                    .font(.headline)
+                
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Show Media Feed", isOn: $detectionManager.showCameraFeed)
                         .onChange(of: detectionManager.showCameraFeed) { _ in
                             detectionManager.updateCameraVisibility()
                         }
@@ -404,7 +462,7 @@ struct ContentView: View {
             .frame(minWidth: 250, maxWidth: 300)
             .padding()
             
-            // Right Panel - Camera View
+            // Right Panel - Media View
             CameraView(detectionManager: detectionManager)
                 .background(Color.black)
         }
@@ -412,6 +470,86 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openTextWindow)) { _ in
             openWindow(id: "Text-View")
         }
+        .sheet(isPresented: $showingCameraPicker) {
+            CameraPickerView(detectionManager: detectionManager)
+        }
+        .fileImporter(
+            isPresented: $showingFilePicker,
+            allowedContentTypes: [.movie, .quickTimeMovie, .mpeg4Movie, .image, .jpeg, .png, .heic],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    detectionManager.loadMediaFile(url: url)
+                }
+            case .failure(let error):
+                print("File picker error: \(error)")
+            }
+        }
+    }
+}
+
+// MARK: - Camera Picker View
+struct CameraPickerView: View {
+    @ObservedObject var detectionManager: DetectionManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var availableCameras: [AVCaptureDevice] = []
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Select Camera")
+                .font(.title2)
+                .fontWeight(.semibold)
+            
+            List(availableCameras, id: \.uniqueID) { camera in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(camera.localizedName)
+                            .font(.headline)
+                        Text(camera.uniqueID)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    if camera.uniqueID == detectionManager.selectedCameraID {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.blue)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    detectionManager.selectCamera(camera)
+                    dismiss()
+                }
+            }
+            
+            HStack {
+                Button("Cancel") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                
+                Spacer()
+            }
+            .padding()
+        }
+        .frame(width: 400, height: 300)
+        .padding()
+        .onAppear {
+            loadAvailableCameras()
+        }
+    }
+    
+    private func loadAvailableCameras() {
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            mediaType: .video,
+            position: .unspecified
+        )
+        availableCameras = discoverySession.devices
     }
 }
 
@@ -424,7 +562,7 @@ struct CameraView: NSViewRepresentable {
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.black.cgColor
         
-        detectionManager.setupCamera(in: view)
+        detectionManager.setupMedia(in: view)
         return view
     }
     
@@ -450,6 +588,12 @@ class DetectionManager: NSObject, ObservableObject {
     @Published var statusMessage: String = "Ready"
     @Published var isDetecting: Bool = false
     
+    // Media source properties
+    @Published var mediaSourceType: MediaSourceType = .camera
+    @Published var selectedCameraID: String = ""
+    @Published var selectedCameraName: String = "Default Camera"
+    @Published var isVideoPlaying: Bool = false
+    
     // New property for philosophical view
     @Published var currentDetection: String? = nil
     @Published var recentDetectedObjects: Set<String> = []
@@ -460,6 +604,15 @@ class DetectionManager: NSObject, ObservableObject {
     private var videoDataOutput: AVCaptureVideoDataOutput?
     private let videoDataOutputQueue = DispatchQueue(label: "VideoDataOutput", qos: .userInitiated)
     private weak var previewView: NSView?
+    
+    // Video player - using Timer instead of CVDisplayLink for simplicity
+    private var player: AVPlayer?
+    private var playerLayer: AVPlayerLayer?
+    private var playerItemVideoOutput: AVPlayerItemVideoOutput?
+    private var videoProcessingTimer: Timer?
+    
+    // Image display
+    private var imageLayer: CALayer?
     
     // Overlay layers
     private var overlayLayer = CALayer()
@@ -493,15 +646,69 @@ class DetectionManager: NSObject, ObservableObject {
         setupVisionRequests()
         setupYOLOModels()
         startFPSTimer()
+        setupDefaultCamera()
+    }
+    
+    deinit {
+        cleanup()
     }
     
     // MARK: - Setup Methods
+    
+    private func setupDefaultCamera() {
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            mediaType: .video,
+            position: .unspecified
+        )
+        
+        if let defaultCamera = discoverySession.devices.first {
+            selectedCameraID = defaultCamera.uniqueID
+            selectedCameraName = defaultCamera.localizedName
+        }
+    }
+    
+    func setupMedia(in view: NSView) {
+        previewView = view
+        
+        // Setup overlay layer
+        overlayLayer.frame = view.bounds
+        overlayLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        view.layer?.addSublayer(overlayLayer)
+        
+        // Create detection layers
+        let layerNames = ["face", "landmarks", "hand", "body", "object", "text", "contour"]
+        for name in layerNames {
+            let layer = CALayer()
+            layer.frame = view.bounds
+            layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+            detectionLayers[name] = layer
+            overlayLayer.addSublayer(layer)
+        }
+        
+        switch mediaSourceType {
+        case .camera:
+            setupCamera(in: view)
+        case .video:
+            setupVideoPlayer(in: view)
+        case .image:
+            setupImageDisplay(in: view)
+        }
+    }
     
     func setupCamera(in view: NSView) {
         captureSession = AVCaptureSession()
         captureSession?.sessionPreset = .high
         
-        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video) else {
+        // Find the selected camera
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            mediaType: .video,
+            position: .unspecified
+        )
+        
+        guard let videoCaptureDevice = discoverySession.devices.first(where: { $0.uniqueID == selectedCameraID }) ??
+                discoverySession.devices.first else {
             updateStatus("No camera available")
             return
         }
@@ -531,25 +738,7 @@ class DetectionManager: NSObject, ObservableObject {
             videoPreviewLayer?.frame = view.bounds
             videoPreviewLayer?.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
             
-            view.layer?.addSublayer(videoPreviewLayer!)
-            
-            // Setup overlay layer
-            overlayLayer.frame = view.bounds
-            overlayLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-            view.layer?.addSublayer(overlayLayer)
-            
-            // Create detection layers
-            let layerNames = ["face", "landmarks", "hand", "body", "object", "text", "contour"]
-            for name in layerNames {
-                let layer = CALayer()
-                layer.frame = view.bounds
-                layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-                detectionLayers[name] = layer
-                overlayLayer.addSublayer(layer)
-            }
-            
-            // Store reference to view
-            self.previewView = view
+            view.layer?.insertSublayer(videoPreviewLayer!, at: 0)
             
             // Start camera session
             DispatchQueue.global(qos: .background).async { [weak self] in
@@ -562,6 +751,192 @@ class DetectionManager: NSObject, ObservableObject {
         } catch {
             updateStatus("Error: \(error.localizedDescription)")
         }
+    }
+    
+    private func setupVideoPlayer(in view: NSView) {
+        guard let player = player else { return }
+        
+        playerLayer = AVPlayerLayer(player: player)
+        playerLayer?.videoGravity = .resizeAspect
+        playerLayer?.frame = view.bounds
+        playerLayer?.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        
+        view.layer?.insertSublayer(playerLayer!, at: 0)
+        
+        // Setup video output for frame processing
+        let settings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        
+        playerItemVideoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: settings)
+        player.currentItem?.add(playerItemVideoOutput!)
+        
+        updateStatus("Video ready")
+    }
+    
+    private func setupImageDisplay(in view: NSView) {
+        // Image display setup would go here
+        updateStatus("Image ready")
+    }
+    
+    private func startVideoProcessingTimer() {
+        videoProcessingTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
+            self?.processVideoFrame()
+        }
+    }
+    
+    private func stopVideoProcessingTimer() {
+        videoProcessingTimer?.invalidate()
+        videoProcessingTimer = nil
+    }
+    
+    func selectCamera(_ camera: AVCaptureDevice) {
+        selectedCameraID = camera.uniqueID
+        selectedCameraName = camera.localizedName
+        mediaSourceType = .camera
+        
+        // Restart media setup with new camera
+        if let view = previewView {
+            cleanup()
+            setupMedia(in: view)
+        }
+    }
+    
+    func loadMediaFile(url: URL) {
+        let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
+        let contentType = resourceValues?.contentType
+        
+        if contentType?.conforms(to: .movie) == true {
+            // Load video
+            mediaSourceType = .video
+            player = AVPlayer(url: url)
+            isVideoPlaying = false
+            
+            if let view = previewView {
+                cleanup()
+                setupMedia(in: view)
+            }
+        } else if contentType?.conforms(to: .image) == true {
+            // Load image
+            mediaSourceType = .image
+            
+            // Process single image for detection
+            if let nsImage = NSImage(contentsOf: url),
+               let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                processImage(cgImage)
+            }
+            
+            if let view = previewView {
+                cleanup()
+                setupMedia(in: view)
+            }
+        }
+    }
+    
+    func toggleVideoPlayback() {
+        guard let player = player else { return }
+        
+        if isVideoPlaying {
+            player.pause()
+            stopVideoProcessingTimer()
+        } else {
+            player.play()
+            if isDetecting {
+                startVideoProcessingTimer()
+            }
+        }
+        isVideoPlaying.toggle()
+    }
+    
+    func restartVideo() {
+        guard let player = player else { return }
+        player.seek(to: .zero)
+        if isVideoPlaying {
+            player.play()
+            if isDetecting {
+                startVideoProcessingTimer()
+            }
+        }
+    }
+    
+    private func processVideoFrame() {
+        guard let playerItemVideoOutput = playerItemVideoOutput,
+              let player = player,
+              isDetecting else { return }
+        
+        let currentTime = player.currentTime()
+        
+        if playerItemVideoOutput.hasNewPixelBuffer(forItemTime: currentTime) {
+            if let pixelBuffer = playerItemVideoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) {
+                DispatchQueue.main.async {
+                    self.processPixelBuffer(pixelBuffer)
+                    self.frameCount += 1
+                }
+            }
+        }
+    }
+    
+    private func processImage(_ cgImage: CGImage) {
+        guard isDetecting else { return }
+        
+        let imageRequestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        var requests = [VNRequest]()
+        
+        // Add requests based on toggle states
+        if faceDetectionEnabled {
+            requests.append(faceDetectionRequest)
+            if faceLandmarksEnabled {
+                requests.append(faceLandmarksRequest)
+            }
+        }
+        
+        if handDetectionEnabled {
+            requests.append(handPoseRequest)
+        }
+        
+        if bodyDetectionEnabled {
+            requests.append(bodyPoseRequest)
+        }
+        
+        if objectDetectionEnabled, let yoloRequest = yoloRequest {
+            requests.append(yoloRequest)
+        }
+        
+        if textDetectionEnabled {
+            requests.append(textDetectionRequest)
+        }
+        
+        if contourDetectionEnabled {
+            requests.append(contoursRequest)
+        }
+        
+        if !requests.isEmpty {
+            do {
+                try imageRequestHandler.perform(requests)
+            } catch {
+                print("Failed to perform request: \(error)")
+            }
+        }
+    }
+    
+    private func cleanup() {
+        // Stop camera session
+        captureSession?.stopRunning()
+        captureSession = nil
+        
+        // Stop video player
+        player?.pause()
+        stopVideoProcessingTimer()
+        
+        // Remove layers
+        videoPreviewLayer?.removeFromSuperlayer()
+        playerLayer?.removeFromSuperlayer()
+        imageLayer?.removeFromSuperlayer()
+        
+        videoPreviewLayer = nil
+        playerLayer = nil
+        imageLayer = nil
+        playerItemVideoOutput = nil
     }
     
     private func setupVisionRequests() {
@@ -602,6 +977,8 @@ class DetectionManager: NSObject, ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.videoPreviewLayer?.isHidden = !self.showCameraFeed
+            self.playerLayer?.isHidden = !self.showCameraFeed
+            self.imageLayer?.isHidden = !self.showCameraFeed
         }
     }
     
@@ -620,6 +997,16 @@ class DetectionManager: NSObject, ObservableObject {
                 self.recentDetectedObjects = []
                 self.detectionHistory = []
             }
+            
+            // Stop video processing when detection stops
+            if mediaSourceType == .video {
+                stopVideoProcessingTimer()
+            }
+        } else {
+            // Start video processing when detection starts and video is playing
+            if mediaSourceType == .video && isVideoPlaying {
+                startVideoProcessingTimer()
+            }
         }
     }
     
@@ -628,6 +1015,51 @@ class DetectionManager: NSObject, ObservableObject {
             guard let layer = self?.detectionLayers[name] else { return }
             layer.sublayers?.forEach { $0.removeFromSuperlayer() }
             self?.updateDetectionCount()
+        }
+    }
+    
+    // MARK: - Pixel Buffer Processing
+    
+    private func processPixelBuffer(_ pixelBuffer: CVPixelBuffer) {
+        var requests = [VNRequest]()
+        
+        // Add requests based on toggle states
+        if faceDetectionEnabled {
+            requests.append(faceDetectionRequest)
+            if faceLandmarksEnabled {
+                requests.append(faceLandmarksRequest)
+            }
+        }
+        
+        if handDetectionEnabled {
+            requests.append(handPoseRequest)
+        }
+        
+        if bodyDetectionEnabled {
+            requests.append(bodyPoseRequest)
+        }
+        
+        if objectDetectionEnabled, let yoloRequest = yoloRequest {
+            requests.append(yoloRequest)
+        }
+        
+        if textDetectionEnabled {
+            requests.append(textDetectionRequest)
+        }
+        
+        if contourDetectionEnabled {
+            requests.append(contoursRequest)
+        }
+        
+        // Perform Vision requests
+        if !requests.isEmpty {
+            let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+            
+            do {
+                try imageRequestHandler.perform(requests)
+            } catch {
+                print("Failed to perform request: \(error)")
+            }
         }
     }
     
@@ -830,8 +1262,22 @@ class DetectionManager: NSObject, ObservableObject {
     // MARK: - Coordinate Conversion
     
     private func convertNormalizedRect(_ rect: CGRect) -> CGRect {
-        guard let previewLayer = videoPreviewLayer,
-              let view = previewView else { return .zero }
+        guard let previewView = previewView else { return .zero }
+        
+        let viewFrame = previewView.bounds
+        
+        // For video player or image display, use the full view bounds
+        if mediaSourceType == .video || mediaSourceType == .image {
+            return CGRect(
+                x: rect.minX * viewFrame.width,
+                y: (1 - rect.maxY) * viewFrame.height,
+                width: rect.width * viewFrame.width,
+                height: rect.height * viewFrame.height
+            )
+        }
+        
+        // For camera, use the preview layer conversion
+        guard let previewLayer = videoPreviewLayer else { return .zero }
         
         let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
         
@@ -844,6 +1290,19 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func convertNormalizedPoint(_ point: CGPoint) -> CGPoint {
+        guard let previewView = previewView else { return .zero }
+        
+        let viewFrame = previewView.bounds
+        
+        // For video player or image display, use the full view bounds
+        if mediaSourceType == .video || mediaSourceType == .image {
+            return CGPoint(
+                x: point.x * viewFrame.width,
+                y: (1 - point.y) * viewFrame.height
+            )
+        }
+        
+        // For camera, use the preview layer conversion
         guard let previewLayer = videoPreviewLayer else { return .zero }
         
         let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
@@ -855,9 +1314,9 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func convertNormalizedPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
-        guard let previewLayer = videoPreviewLayer else { return .zero }
+        guard let previewView = previewView else { return .zero }
         
-        let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        let viewFrame = previewView.bounds
         let convertedRect = convertNormalizedRect(rect)
         
         return CGPoint(
@@ -1046,45 +1505,6 @@ extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
-        var requests = [VNRequest]()
-        
-        // Add requests based on toggle states
-        if faceDetectionEnabled {
-            requests.append(faceDetectionRequest)
-            if faceLandmarksEnabled {
-                requests.append(faceLandmarksRequest)
-            }
-        }
-        
-        if handDetectionEnabled {
-            requests.append(handPoseRequest)
-        }
-        
-        if bodyDetectionEnabled {
-            requests.append(bodyPoseRequest)
-        }
-        
-        if objectDetectionEnabled, let yoloRequest = yoloRequest {
-            requests.append(yoloRequest)
-        }
-        
-        if textDetectionEnabled {
-            requests.append(textDetectionRequest)
-        }
-        
-        if contourDetectionEnabled {
-            requests.append(contoursRequest)
-        }
-        
-        // Perform Vision requests
-        if !requests.isEmpty {
-            let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-            
-            do {
-                try imageRequestHandler.perform(requests)
-            } catch {
-                print("Failed to perform request: \(error)")
-            }
-        }
+        processPixelBuffer(pixelBuffer)
     }
 }
