@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import AVFoundation
 import Vision
 import CoreML
@@ -35,6 +36,16 @@ struct objectdetectionApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 800, height: 600)
+        
+        .commands {
+            // Add to the standard View menu after the Toolbar commands
+            CommandGroup(after: .toolbar) {
+                Button(detectionManager.showSelectionGUI ? "Hide Selection GUI" : "Show Selection GUI") {
+                    detectionManager.showSelectionGUI.toggle()
+                }
+                .keyboardShortcut("v", modifiers: [.command, .option])
+            }
+        }
     }
 }
 
@@ -225,30 +236,44 @@ struct TextView: View {
         .onChange(of: detectionManager.recentDetectedObjects) { newSet in
             handleDetectionState()
         }
+        .onChange(of: detectionManager.isSpeaking) { speaking in
+            // When TTS finishes, advance to the next appropriate phrase
+            if !speaking {
+                if detectionManager.recentDetectedObjects.isEmpty {
+                    // Continue to speak the idle phrase if still idle
+                    speakCurrentPhrase()
+                } else {
+                    generateNewPhrase()
+                }
+            }
+        }
     }
     
     // MARK: - Helper Methods
     
     private func handleDetectionState() {
         if detectionManager.recentDetectedObjects.isEmpty {
-            // Nothing detected - clear everything
+            // Nothing detected - clear and potentially speak "I see nothing" if not speaking
             stopTimer()
             withAnimation {
                 currentObject = nil
                 displayedNegation = nil
             }
+            // If not speaking, speak the idle phrase
+            if !detectionManager.isSpeaking {
+                speakCurrentPhrase()
+            }
         } else {
-            // Something detected - start or restart the cycle
+            // Something detected - only generate a new phrase if not currently speaking
             stopTimer()
-            generateNewPhrase()
-            startTimer()
+            if !detectionManager.isSpeaking {
+                generateNewPhrase()
+            }
         }
     }
     
     private func startTimer() {
-        cycleTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-            generateNewPhrase()
-        }
+        // Timer disabled; phrases advance when TTS finishes
     }
     
     private func stopTimer() {
@@ -257,15 +282,31 @@ struct TextView: View {
     }
     
     private func generateNewPhrase() {
-        guard !detectionManager.recentDetectedObjects.isEmpty else { return }
-        
+        guard !detectionManager.recentDetectedObjects.isEmpty else {
+            // If empty, speak the idle phrase if not speaking
+            if !detectionManager.isSpeaking { speakCurrentPhrase() }
+            return
+        }
+        guard !detectionManager.isSpeaking else { return }
+
         withAnimation(.easeInOut(duration: 0.3)) {
             // Pick a random object from currently detected objects
             currentObject = detectionManager.recentDetectedObjects.randomElement()
-            
             // Pick a random negation
             displayedNegation = negations.randomElement() ?? "do not feel"
         }
+        // Speak the composed phrase
+        speakCurrentPhrase()
+    }
+    
+    private func speakCurrentPhrase() {
+        let phrase: String
+        if let obj = currentObject, let neg = displayedNegation, !obj.isEmpty {
+            phrase = "I see \(obj.lowercased()). But I \(neg)."
+        } else {
+            phrase = "I see nothing"
+        }
+        detectionManager.speak(text: phrase)
     }
     
     // Color categories
@@ -337,131 +378,132 @@ struct ContentView: View {
     
     var body: some View {
         HSplitView {
-            // Left Panel - Controls
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Media Source")
-                    .font(.headline)
-                    .padding(.top)
-                
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Button("Select Camera") {
-                            showingCameraPicker = true
-                        }
-                        .buttonStyle(.bordered)
-                        
-                        Button("Load Media File") {
-                            showingFilePicker = true
-                        }
-                        .buttonStyle(.bordered)
-                    }
+            if detectionManager.showSelectionGUI {
+                // Left Panel - Controls
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Media Source")
+                        .font(.headline)
+                        .padding(.top)
                     
-                    if detectionManager.mediaSourceType == .camera {
-                        Text("Source: \(detectionManager.selectedCameraName)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else if detectionManager.mediaSourceType == .video {
-                        Text("Source: Video File")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else if detectionManager.mediaSourceType == .image {
-                        Text("Source: Image File")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    if detectionManager.mediaSourceType == .video {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Button(detectionManager.isVideoPlaying ? "Pause" : "Play") {
-                                detectionManager.toggleVideoPlayback()
+                            Button("Select Camera") {
+                                showingCameraPicker = true
                             }
                             .buttonStyle(.bordered)
                             
-                            Button("Restart") {
-                                detectionManager.restartVideo()
+                            Button("Load Media File") {
+                                showingFilePicker = true
                             }
                             .buttonStyle(.bordered)
                         }
-                    }
-                }
-                .padding(.horizontal)
-                
-                Divider()
-                
-                Text("Detection Controls")
-                    .font(.headline)
-                
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Show Media Feed", isOn: $detectionManager.showCameraFeed)
-                        .onChange(of: detectionManager.showCameraFeed) { _ in
-                            detectionManager.updateCameraVisibility()
+                        
+                        if detectionManager.mediaSourceType == .camera {
+                            Text("Source: \(detectionManager.selectedCameraName)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if detectionManager.mediaSourceType == .video {
+                            Text("Source: Video File")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if detectionManager.mediaSourceType == .image {
+                            Text("Source: Image File")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
+                        
+                        if detectionManager.mediaSourceType == .video {
+                            HStack {
+                                Button(detectionManager.isVideoPlaying ? "Pause" : "Play") {
+                                    detectionManager.toggleVideoPlayback()
+                                }
+                                .buttonStyle(.bordered)
+                                
+                                Button("Restart") {
+                                    detectionManager.restartVideo()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
                     
                     Divider()
                     
-                    Toggle("Face Detection", isOn: $detectionManager.faceDetectionEnabled)
-                        .onChange(of: detectionManager.faceDetectionEnabled) { enabled in
-                            if !enabled { detectionManager.clearLayer("face") }
-                        }
+                    Text("Detection Controls")
+                        .font(.headline)
                     
-                    Toggle("Face Landmarks", isOn: $detectionManager.faceLandmarksEnabled)
-                        .disabled(!detectionManager.faceDetectionEnabled)
-                        .onChange(of: detectionManager.faceLandmarksEnabled) { enabled in
-                            if !enabled { detectionManager.clearLayer("landmarks") }
-                        }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Show Media Feed", isOn: $detectionManager.showCameraFeed)
+                            .onChange(of: detectionManager.showCameraFeed) { _ in
+                                detectionManager.updateCameraVisibility()
+                            }
+                        
+                        Divider()
+                        
+                        Toggle("Face Detection", isOn: $detectionManager.faceDetectionEnabled)
+                            .onChange(of: detectionManager.faceDetectionEnabled) { enabled in
+                                if !enabled { detectionManager.clearLayer("face") }
+                            }
+                        
+                        Toggle("Face Landmarks", isOn: $detectionManager.faceLandmarksEnabled)
+                            .disabled(!detectionManager.faceDetectionEnabled)
+                            .onChange(of: detectionManager.faceLandmarksEnabled) { enabled in
+                                if !enabled { detectionManager.clearLayer("landmarks") }
+                            }
+                        
+                        Toggle("Hand Pose", isOn: $detectionManager.handDetectionEnabled)
+                            .onChange(of: detectionManager.handDetectionEnabled) { enabled in
+                                if !enabled { detectionManager.clearLayer("hand") }
+                            }
+                        
+                        Toggle("Body Pose", isOn: $detectionManager.bodyDetectionEnabled)
+                            .onChange(of: detectionManager.bodyDetectionEnabled) { enabled in
+                                if !enabled { detectionManager.clearLayer("body") }
+                            }
+                        
+                        Toggle("Object Detection (YOLO)", isOn: $detectionManager.objectDetectionEnabled)
+                            .onChange(of: detectionManager.objectDetectionEnabled) { enabled in
+                                if !enabled { detectionManager.clearLayer("object") }
+                            }
+                        
+                        Toggle("Text Recognition", isOn: $detectionManager.textDetectionEnabled)
+                            .onChange(of: detectionManager.textDetectionEnabled) { enabled in
+                                if !enabled { detectionManager.clearLayer("text") }
+                            }
+                        
+                        Toggle("Contour Detection", isOn: $detectionManager.contourDetectionEnabled)
+                            .onChange(of: detectionManager.contourDetectionEnabled) { enabled in
+                                if !enabled { detectionManager.clearLayer("contour") }
+                            }
+                    }
+                    .padding(.horizontal)
                     
-                    Toggle("Hand Pose", isOn: $detectionManager.handDetectionEnabled)
-                        .onChange(of: detectionManager.handDetectionEnabled) { enabled in
-                            if !enabled { detectionManager.clearLayer("hand") }
-                        }
+                    Divider()
                     
-                    Toggle("Body Pose", isOn: $detectionManager.bodyDetectionEnabled)
-                        .onChange(of: detectionManager.bodyDetectionEnabled) { enabled in
-                            if !enabled { detectionManager.clearLayer("body") }
-                        }
+                    Text("Performance")
+                        .font(.headline)
                     
-                    Toggle("Object Detection (YOLO)", isOn: $detectionManager.objectDetectionEnabled)
-                        .onChange(of: detectionManager.objectDetectionEnabled) { enabled in
-                            if !enabled { detectionManager.clearLayer("object") }
-                        }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("FPS: \(String(format: "%.1f", detectionManager.currentFPS))")
+                        Text("Detections: \(detectionManager.detectionCount)")
+                        Text("Status: \(detectionManager.statusMessage)")
+                    }
+                    .padding(.horizontal)
+                    .font(.system(.body, design: .monospaced))
                     
-                    Toggle("Text Recognition", isOn: $detectionManager.textDetectionEnabled)
-                        .onChange(of: detectionManager.textDetectionEnabled) { enabled in
-                            if !enabled { detectionManager.clearLayer("text") }
-                        }
+                    Spacer()
                     
-                    Toggle("Contour Detection", isOn: $detectionManager.contourDetectionEnabled)
-                        .onChange(of: detectionManager.contourDetectionEnabled) { enabled in
-                            if !enabled { detectionManager.clearLayer("contour") }
-                        }
+                    Button(action: detectionManager.toggleDetection) {
+                        Label(detectionManager.isDetecting ? "Stop Detection" : "Start Detection",
+                              systemImage: detectionManager.isDetecting ? "stop.circle" : "play.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding()
                 }
-                .padding(.horizontal)
-                
-                Divider()
-                
-                Text("Performance")
-                    .font(.headline)
-                
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("FPS: \(String(format: "%.1f", detectionManager.currentFPS))")
-                    Text("Detections: \(detectionManager.detectionCount)")
-                    Text("Status: \(detectionManager.statusMessage)")
-                }
-                .padding(.horizontal)
-                .font(.system(.body, design: .monospaced))
-                
-                Spacer()
-                
-                Button(action: detectionManager.toggleDetection) {
-                    Label(detectionManager.isDetecting ? "Stop Detection" : "Start Detection",
-                          systemImage: detectionManager.isDetecting ? "stop.circle" : "play.circle")
-                }
-                .buttonStyle(.borderedProminent)
+                .frame(minWidth: 250, maxWidth: 300)
                 .padding()
             }
-            .frame(minWidth: 250, maxWidth: 300)
-            .padding()
-            
             // Right Panel - Media View
             CameraView(detectionManager: detectionManager)
                 .background(Color.black)
@@ -582,11 +624,16 @@ class DetectionManager: NSObject, ObservableObject {
     @Published var objectDetectionEnabled = false
     @Published var textDetectionEnabled = false
     @Published var contourDetectionEnabled = true
+    @Published var showSelectionGUI: Bool = false
     
     @Published var currentFPS: Double = 0
     @Published var detectionCount: Int = 0
     @Published var statusMessage: String = "Ready"
     @Published var isDetecting: Bool = false
+    
+    @Published var isSpeaking: Bool = false
+    private let speechSynth = AVSpeechSynthesizer()
+    private var preferredVoice: AVSpeechSynthesisVoice? = nil
     
     // Media source properties
     @Published var mediaSourceType: MediaSourceType = .camera
@@ -647,6 +694,12 @@ class DetectionManager: NSObject, ObservableObject {
         setupYOLOModels()
         startFPSTimer()
         setupDefaultCamera()
+        
+        // Configure TTS (AVSpeechSynthesizer)
+        speechSynth.delegate = self
+        // Choose a preferred voice similar to "Ralph" if available; otherwise fallback to en-US
+        preferredVoice = AVSpeechSynthesisVoice.speechVoices().first(where: { $0.name.localizedCaseInsensitiveContains("Ralph") })
+            ?? AVSpeechSynthesisVoice(language: "en-US")
     }
     
     deinit {
@@ -968,6 +1021,28 @@ class DetectionManager: NSObject, ObservableObject {
             } catch {
                 print("Error loading YOLOv3TinyFP16: \(error)")
             }
+        }
+    }
+    
+    // MARK: - TTS
+    func speak(text textToSpeak: String) {
+        // If already speaking, don't interrupt; caller should wait for completion
+        if isSpeaking || speechSynth.isSpeaking { return }
+        isSpeaking = true
+
+        let utterance = AVSpeechUtterance(string: textToSpeak)
+        // Apply preferred voice if available
+        utterance.voice = preferredVoice ?? AVSpeechSynthesisVoice(language: "en-US")
+        // Tune rate and pitch to roughly match the previous configuration
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.pitchMultiplier = 0.9
+
+        speechSynth.speak(utterance)
+    }
+
+    func stopSpeaking() {
+        if speechSynth.isSpeaking {
+            speechSynth.stopSpeaking(at: .immediate)
         }
     }
     
@@ -1506,5 +1581,14 @@ extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
         processPixelBuffer(pixelBuffer)
+    }
+}
+
+// MARK: - AVSpeechSynthesizerDelegate
+extension DetectionManager: AVSpeechSynthesizerDelegate {
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async { [weak self] in
+            self?.isSpeaking = false
+        }
     }
 }
