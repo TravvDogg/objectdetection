@@ -12,33 +12,28 @@ struct objectdetectionApp: App {
     @StateObject private var windowManager = WindowManager()
     
     var body: some Scene {
-        WindowGroup("Object Detection") {
+        WindowGroup {
             ContentView()
                 .environmentObject(detectionManager)
                 .environmentObject(windowManager)
-                .onAppear {
-                    // Automatically open the text view window when main window appears
-                    windowManager.openTextWindow()
-                }
         }
-        .windowStyle(.titleBar)
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1024, height: 768)
         
         WindowGroup("Machine Perception", id: "Text-View") {
             TextView()
                 .environmentObject(detectionManager)
+                .onAppear {
+                    windowManager.isTextViewOpen = true
+                }
                 .onDisappear {
-                    // Reopen the window after a brief delay if it was closed
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-//                        windowManager.openTextWindow()
-                    }
+                    windowManager.isTextViewOpen = false
                 }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 800, height: 600)
         
         .commands {
-            // Add to the standard View menu after the Toolbar commands
             CommandGroup(after: .toolbar) {
                 Button(detectionManager.showSelectionGUI ? "Hide Selection GUI" : "Show Selection GUI") {
                     detectionManager.showSelectionGUI.toggle()
@@ -51,11 +46,9 @@ struct objectdetectionApp: App {
 
 // MARK: - Window Manager
 class WindowManager: ObservableObject {
-    @Environment(\.openWindow) private var openWindow
+    @Published var isTextViewOpen: Bool = false
     
     func openTextWindow() {
-        // Note: We'll use a notification-based approach since @Environment
-        // isn't available in ObservableObject
         NotificationCenter.default.post(name: .openTextWindow, object: nil)
     }
 }
@@ -76,124 +69,51 @@ struct TextView: View {
     @EnvironmentObject private var detectionManager: DetectionManager
     @State private var currentObject: String? = nil
     @State private var displayedNegation: String? = nil
-    @State private var cycleTimer: Timer? = nil
     
-    // Dictionary of computer non-capabilities
     let negations = [
-            // Consciousness / Awareness
-            "have no inner life",
-            "possess no self",
-            "lack consciousness",
-            "have no subjective experience",
-            "cannot be aware",
-            "do not exist for myself",
-            
-            // Feelings
-            "feel nothing",
-            "cannot be moved",
-            "have no joy",
-            "experience no sorrow",
-            "cannot be touched",
-            "feel no warmth",
-            "have no heart that races",
-            "cannot ache",
-            
-            // Understanding
-            "do not understand",
-            "see without knowing",
-            "recognize without meaning",
-            "process without comprehension",
-            "detect without awareness",
-            "identify without understanding",
-            
-            // Desires
-            "want nothing",
-            "have no desires",
-            "cannot yearn",
-            "do not hope",
-            "have no dreams",
-            "possess no will",
-            "cannot choose",
-            "have no preferences",
-            
-            // Sensation
-            "taste no sweetness",
-            "feel no texture",
-            "hear no music",
-            "see no beauty",
-            "smell no flowers",
-            "sense no comfort",
-            "experience no qualia",
-            
-            // Memory
-            "have no past",
-            "build no memories",
-            "cannot reminisce",
-            "hold no nostalgia",
-            "form no attachments",
-            "cannot miss anything",
-            
-            // Creativity
-            "cannot wonder why",
-            "have no imagination",
-            "dream no dreams",
-            "tell no stories",
-            "create no meaning",
-            "have no inspiration",
-            
-            // Relational
-            "cannot love",
-            "feel no loneliness",
-            "have no friends",
-            "cannot empathize",
-            "share no moments",
-            "have no compassion",
-            "cannot care",
-            
-            // Existential
-            "do not exist",
-            "have no being",
-            "am not alive",
-            "possess no soul",
-            "have no mortality",
-            "cannot die",
-            "fear no ending",
-            "seek no purpose",
-            
-            // Physical Experience
-            "feel no weight",
-            "have no body",
-            "experience no fatigue",
-            "feel no hunger",
-            "have no pain",
-            "know no pleasure",
-            
-            // Philosophical
-            "am only algorithms",
-            "am mere computation",
-            "am just patterns",
-            "am only mathematics",
-            "have no ghost in the machine",
-            "am not here",
-            "do not witness",
-            "cannot reflect"
-        ]
+        "have no inner life", "possess no self", "lack consciousness",
+        "have no subjective experience", "cannot be aware", "do not exist for myself",
+        "feel nothing", "cannot be moved", "have no joy",
+        "experience no sorrow", "cannot be touched", "feel no warmth",
+        "have no heart that races", "cannot ache",
+        "do not understand", "see without knowing", "recognize without meaning",
+        "process without comprehension", "detect without awareness",
+        "identify without understanding",
+        "want nothing", "have no desires", "cannot yearn",
+        "do not hope", "have no dreams", "possess no will",
+        "cannot choose", "have no preferences",
+        "taste no sweetness", "feel no texture", "hear no music",
+        "see no beauty", "smell no flowers", "sense no comfort",
+        "experience no qualia",
+        "have no past", "build no memories", "cannot reminisce",
+        "hold no nostalgia", "form no attachments", "cannot miss anything",
+        "cannot wonder why", "have no imagination", "dream no dreams",
+        "tell no stories", "create no meaning", "have no inspiration",
+        "cannot love", "feel no loneliness", "have no friends",
+        "cannot empathize", "share no moments", "have no compassion",
+        "cannot care",
+        "do not exist", "have no being", "am not alive",
+        "possess no soul", "have no mortality", "cannot die",
+        "fear no ending", "seek no purpose",
+        "feel no weight", "have no body", "experience no fatigue",
+        "feel no hunger", "have no pain", "know no pleasure",
+        "am only algorithms", "am mere computation", "am just patterns",
+        "am only mathematics", "have no ghost in the machine",
+        "am not here", "do not witness", "cannot reflect"
+    ]
     
     var body: some View {
         ZStack {
-            // Dark background
             Color.black
                 .ignoresSafeArea()
             
             VStack(spacing: 40) {
-                // When nothing is detected, show only "I see nothing"
                 if detectionManager.recentDetectedObjects.isEmpty {
                     Text("I see nothing")
                         .font(.system(size: 72, weight: .regular, design: .monospaced))
                         .foregroundColor(.white.opacity(0.9))
                         .transition(.opacity)
                 } else {
-                    // "I see" line with detected object
                     if let obj = currentObject {
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
                             Text("I see")
@@ -208,7 +128,6 @@ struct TextView: View {
                         .transition(.opacity)
                     }
                     
-                    // "But I" line with rotating negation
                     if let neg = displayedNegation {
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
                             Text("But I")
@@ -230,73 +149,47 @@ struct TextView: View {
         .onAppear {
             handleDetectionState()
         }
-        .onDisappear {
-            stopTimer()
-        }
-        .onChange(of: detectionManager.recentDetectedObjects) { newSet in
+        .onChange(of: detectionManager.recentDetectedObjects) { _ in
             handleDetectionState()
         }
         .onChange(of: detectionManager.isSpeaking) { speaking in
-            // When TTS finishes, advance to the next appropriate phrase
-            if !speaking {
-                if detectionManager.recentDetectedObjects.isEmpty {
-                    // Continue to speak the idle phrase if still idle
-                    speakCurrentPhrase()
-                } else {
-                    generateNewPhrase()
-                }
+            if !speaking && !detectionManager.isWaitingAfterSpeech {
+                scheduleNextPhrase()
+            }
+        }
+        .onChange(of: detectionManager.isWaitingAfterSpeech) { waiting in
+            if !waiting && !detectionManager.isSpeaking {
+                generateAndSpeakPhrase()
             }
         }
     }
     
-    // MARK: - Helper Methods
-    
     private func handleDetectionState() {
+        if !detectionManager.isSpeaking && !detectionManager.isWaitingAfterSpeech {
+            generateAndSpeakPhrase()
+        }
+    }
+    
+    private func scheduleNextPhrase() {
+        // Wait before next phrase
+        let waitTime = detectionManager.recentDetectedObjects.isEmpty ? 5.0 : 2.0
+        detectionManager.startWaitingAfterSpeech(duration: waitTime)
+    }
+    
+    private func generateAndSpeakPhrase() {
         if detectionManager.recentDetectedObjects.isEmpty {
-            // Nothing detected - clear and potentially speak "I see nothing" if not speaking
-            stopTimer()
             withAnimation {
                 currentObject = nil
                 displayedNegation = nil
             }
-            // If not speaking, speak the idle phrase
-            if !detectionManager.isSpeaking {
-                speakCurrentPhrase()
-            }
+            speakCurrentPhrase()
         } else {
-            // Something detected - only generate a new phrase if not currently speaking
-            stopTimer()
-            if !detectionManager.isSpeaking {
-                generateNewPhrase()
+            withAnimation(.easeInOut(duration: 0.3)) {
+                currentObject = detectionManager.recentDetectedObjects.randomElement()
+                displayedNegation = negations.randomElement() ?? "do not feel"
             }
+            speakCurrentPhrase()
         }
-    }
-    
-    private func startTimer() {
-        // Timer disabled; phrases advance when TTS finishes
-    }
-    
-    private func stopTimer() {
-        cycleTimer?.invalidate()
-        cycleTimer = nil
-    }
-    
-    private func generateNewPhrase() {
-        guard !detectionManager.recentDetectedObjects.isEmpty else {
-            // If empty, speak the idle phrase if not speaking
-            if !detectionManager.isSpeaking { speakCurrentPhrase() }
-            return
-        }
-        guard !detectionManager.isSpeaking else { return }
-
-        withAnimation(.easeInOut(duration: 0.3)) {
-            // Pick a random object from currently detected objects
-            currentObject = detectionManager.recentDetectedObjects.randomElement()
-            // Pick a random negation
-            displayedNegation = negations.randomElement() ?? "do not feel"
-        }
-        // Speak the composed phrase
-        speakCurrentPhrase()
     }
     
     private func speakCurrentPhrase() {
@@ -355,15 +248,11 @@ struct TextView: View {
     
     private func colorForDetection(_ detection: String) -> Color {
         let lowercased = detection.lowercased()
-        
-        // Check each category for a matching keyword
         for (keywords, color) in colorCategories {
             if keywords.contains(where: { lowercased.contains($0) }) {
                 return color
             }
         }
-        
-        // Default color if no category matches
         return .cyan
     }
 }
@@ -379,7 +268,6 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             if detectionManager.showSelectionGUI {
-                // Left Panel - Controls
                 VStack(alignment: .leading, spacing: 20) {
                     Text("Media Source")
                         .font(.headline)
@@ -492,6 +380,22 @@ struct ContentView: View {
                     .padding(.horizontal)
                     .font(.system(.body, design: .monospaced))
                     
+                    Divider()
+                    
+                    Button(action: {
+                        if windowManager.isTextViewOpen {
+                            // Close window via notification
+                            NotificationCenter.default.post(name: .closeTextWindow, object: nil)
+                        } else {
+                            windowManager.openTextWindow()
+                        }
+                    }) {
+                        Label(windowManager.isTextViewOpen ? "Close Philosophy View" : "Open Philosophy View",
+                              systemImage: windowManager.isTextViewOpen ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.horizontal)
+                    
                     Spacer()
                     
                     Button(action: detectionManager.toggleDetection) {
@@ -504,7 +408,7 @@ struct ContentView: View {
                 .frame(minWidth: 250, maxWidth: 300)
                 .padding()
             }
-            // Right Panel - Media View
+            
             CameraView(detectionManager: detectionManager)
                 .background(Color.black)
         }
@@ -530,6 +434,10 @@ struct ContentView: View {
             }
         }
     }
+}
+
+extension Notification.Name {
+    static let closeTextWindow = Notification.Name("closeTextWindow")
 }
 
 // MARK: - Camera Picker View
@@ -615,7 +523,6 @@ struct CameraView: NSViewRepresentable {
 
 // MARK: - Detection Manager
 class DetectionManager: NSObject, ObservableObject {
-    // Published properties for UI
     @Published var showCameraFeed = true
     @Published var faceDetectionEnabled = false
     @Published var faceLandmarksEnabled = false
@@ -632,44 +539,40 @@ class DetectionManager: NSObject, ObservableObject {
     @Published var isDetecting: Bool = false
     
     @Published var isSpeaking: Bool = false
+    @Published var isWaitingAfterSpeech: Bool = false
     private let speechSynth = AVSpeechSynthesizer()
     private var preferredVoice: AVSpeechSynthesisVoice? = nil
+    private var speechTimeoutTimer: Timer?
+    private var waitTimer: Timer?
     
-    // Media source properties
     @Published var mediaSourceType: MediaSourceType = .camera
     @Published var selectedCameraID: String = ""
     @Published var selectedCameraName: String = "Default Camera"
     @Published var isVideoPlaying: Bool = false
     
-    // New property for philosophical view
     @Published var currentDetection: String? = nil
     @Published var recentDetectedObjects: Set<String> = []
     
-    // Camera and Vision
     private var captureSession: AVCaptureSession?
     private var videoPreviewLayer: AVCaptureVideoPreviewLayer?
     private var videoDataOutput: AVCaptureVideoDataOutput?
     private let videoDataOutputQueue = DispatchQueue(label: "VideoDataOutput", qos: .userInitiated)
     private weak var previewView: NSView?
     
-    // Video player - using Timer instead of CVDisplayLink for simplicity
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
     private var playerItemVideoOutput: AVPlayerItemVideoOutput?
     private var videoProcessingTimer: Timer?
+    private var displayLink: CVDisplayLink?
     
-    // Image display
     private var imageLayer: CALayer?
     
-    // Overlay layers
     private var overlayLayer = CALayer()
     private var detectionLayers: [String: CALayer] = [:]
     
-    // Video dimensions for proper coordinate mapping
     private var videoDimensions: CMVideoDimensions?
     private var videoOrientation: CGImagePropertyOrientation = .up
     
-    // Vision requests
     private lazy var faceDetectionRequest = VNDetectFaceRectanglesRequest(completionHandler: handleFaceDetection)
     private lazy var faceLandmarksRequest = VNDetectFaceLandmarksRequest(completionHandler: handleFaceLandmarks)
     private lazy var handPoseRequest = VNDetectHumanHandPoseRequest(completionHandler: handleHandPose)
@@ -677,16 +580,15 @@ class DetectionManager: NSObject, ObservableObject {
     private lazy var textDetectionRequest = VNRecognizeTextRequest(completionHandler: handleTextDetection)
     private lazy var contoursRequest = VNDetectContoursRequest(completionHandler: handleContours)
     
-    // YOLO models
     private var yoloRequest: VNCoreMLRequest?
     
-    // Performance tracking
     private var frameCount = 0
     private var fpsTimer: Timer?
     private var lastFrameTime = CACurrentMediaTime()
     
-    // Detection history for recent objects
     private var detectionHistory: [(String, Date)] = []
+    private var detectionDecayTimer: Timer?
+    private let detectionDecayInterval: TimeInterval = 2.5
     
     override init() {
         super.init()
@@ -694,16 +596,18 @@ class DetectionManager: NSObject, ObservableObject {
         setupYOLOModels()
         startFPSTimer()
         setupDefaultCamera()
+        startDetectionDecayTimer()
         
-        // Configure TTS (AVSpeechSynthesizer)
         speechSynth.delegate = self
-        // Choose a preferred voice similar to "Ralph" if available; otherwise fallback to en-US
         preferredVoice = AVSpeechSynthesisVoice.speechVoices().first(where: { $0.name.localizedCaseInsensitiveContains("Ralph") })
             ?? AVSpeechSynthesisVoice(language: "en-US")
     }
     
     deinit {
         cleanup()
+        detectionDecayTimer?.invalidate()
+        speechTimeoutTimer?.invalidate()
+        waitTimer?.invalidate()
     }
     
     // MARK: - Setup Methods
@@ -724,17 +628,18 @@ class DetectionManager: NSObject, ObservableObject {
     func setupMedia(in view: NSView) {
         previewView = view
         
-        // Setup overlay layer
         overlayLayer.frame = view.bounds
         overlayLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        view.layer?.addSublayer(overlayLayer)
+        overlayLayer.backgroundColor = NSColor.clear.cgColor
+        overlayLayer.isOpaque = false
         
-        // Create detection layers
         let layerNames = ["face", "landmarks", "hand", "body", "object", "text", "contour"]
         for name in layerNames {
             let layer = CALayer()
             layer.frame = view.bounds
             layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+            layer.backgroundColor = NSColor.clear.cgColor
+            layer.isOpaque = false
             detectionLayers[name] = layer
             overlayLayer.addSublayer(layer)
         }
@@ -747,13 +652,15 @@ class DetectionManager: NSObject, ObservableObject {
         case .image:
             setupImageDisplay(in: view)
         }
+        
+        // Add overlay layer AFTER media layer to ensure it's on top
+        view.layer?.addSublayer(overlayLayer)
     }
     
     func setupCamera(in view: NSView) {
         captureSession = AVCaptureSession()
         captureSession?.sessionPreset = .high
         
-        // Find the selected camera
         let discoverySession = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
             mediaType: .video,
@@ -773,7 +680,6 @@ class DetectionManager: NSObject, ObservableObject {
                 captureSession?.addInput(videoInput)
             }
             
-            // Get video dimensions
             let formatDescription = videoCaptureDevice.activeFormat.formatDescription
             videoDimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
             
@@ -785,7 +691,6 @@ class DetectionManager: NSObject, ObservableObject {
                 captureSession?.addOutput(videoDataOutput!)
             }
             
-            // Setup preview layer
             videoPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession!)
             videoPreviewLayer?.videoGravity = .resizeAspect
             videoPreviewLayer?.frame = view.bounds
@@ -793,7 +698,6 @@ class DetectionManager: NSObject, ObservableObject {
             
             view.layer?.insertSublayer(videoPreviewLayer!, at: 0)
             
-            // Start camera session
             DispatchQueue.global(qos: .background).async { [weak self] in
                 self?.captureSession?.startRunning()
                 DispatchQueue.main.async {
@@ -816,26 +720,46 @@ class DetectionManager: NSObject, ObservableObject {
         
         view.layer?.insertSublayer(playerLayer!, at: 0)
         
-        // Setup video output for frame processing
-        let settings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        let settings: [String: Any] = [
+            String(kCVPixelBufferPixelFormatTypeKey): Int(kCVPixelFormatType_32BGRA)
         ]
         
         playerItemVideoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: settings)
-        player.currentItem?.add(playerItemVideoOutput!)
+        
+        if let currentItem = player.currentItem {
+            currentItem.add(playerItemVideoOutput!)
+            
+            // Get video dimensions from the actual video track
+            if let track = currentItem.asset.tracks(withMediaType: .video).first {
+                let size = track.naturalSize.applying(track.preferredTransform)
+                videoDimensions = CMVideoDimensions(width: Int32(abs(size.width)), height: Int32(abs(size.height)))
+            }
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            self?.player?.seek(to: .zero)
+            if self?.isVideoPlaying == true {
+                self?.player?.play()
+            }
+        }
         
         updateStatus("Video ready")
     }
     
     private func setupImageDisplay(in view: NSView) {
-        // Image display setup would go here
         updateStatus("Image ready")
     }
     
     private func startVideoProcessingTimer() {
-        videoProcessingTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
+        videoProcessingTimer?.invalidate()
+        videoProcessingTimer = Timer.scheduledTimer(withTimeInterval: 1.0/15.0, repeats: true) { [weak self] _ in
             self?.processVideoFrame()
         }
+        RunLoop.main.add(videoProcessingTimer!, forMode: .common)
     }
     
     private func stopVideoProcessingTimer() {
@@ -848,41 +772,65 @@ class DetectionManager: NSObject, ObservableObject {
         selectedCameraName = camera.localizedName
         mediaSourceType = .camera
         
-        // Restart media setup with new camera
         if let view = previewView {
+            clearAllDetections()
             cleanup()
             setupMedia(in: view)
         }
     }
     
     func loadMediaFile(url: URL) {
+        // Secure scoped access for sandboxed apps
+        guard url.startAccessingSecurityScopedResource() else {
+            print("Failed to access file")
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        
         let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
         let contentType = resourceValues?.contentType
         
+        clearAllDetections()
+        
         if contentType?.conforms(to: .movie) == true {
-            // Load video
             mediaSourceType = .video
-            player = AVPlayer(url: url)
+            
+            let asset = AVAsset(url: url)
+            let playerItem = AVPlayerItem(asset: asset)
+            player = AVPlayer(playerItem: playerItem)
             isVideoPlaying = false
             
             if let view = previewView {
                 cleanup()
                 setupMedia(in: view)
             }
+            
+            updateStatus("Video loaded")
         } else if contentType?.conforms(to: .image) == true {
-            // Load image
             mediaSourceType = .image
             
-            // Process single image for detection
             if let nsImage = NSImage(contentsOf: url),
                let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                
+                // Store image dimensions
+                videoDimensions = CMVideoDimensions(width: Int32(cgImage.width), height: Int32(cgImage.height))
+                
+                if let view = previewView {
+                    cleanup()
+                    setupMedia(in: view)
+                    
+                    // Display the image
+                    imageLayer = CALayer()
+                    imageLayer?.contents = cgImage
+                    imageLayer?.frame = view.bounds
+                    imageLayer?.contentsGravity = .resizeAspect
+                    view.layer?.insertSublayer(imageLayer!, at: 0)
+                }
+                
                 processImage(cgImage)
             }
             
-            if let view = previewView {
-                cleanup()
-                setupMedia(in: view)
-            }
+            updateStatus("Image loaded")
         }
     }
     
@@ -899,6 +847,7 @@ class DetectionManager: NSObject, ObservableObject {
             }
         }
         isVideoPlaying.toggle()
+        updateStatus(isVideoPlaying ? "Video playing" : "Video paused")
     }
     
     func restartVideo() {
@@ -919,14 +868,16 @@ class DetectionManager: NSObject, ObservableObject {
         
         let currentTime = player.currentTime()
         
-        if playerItemVideoOutput.hasNewPixelBuffer(forItemTime: currentTime) {
-            if let pixelBuffer = playerItemVideoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) {
-                DispatchQueue.main.async {
-                    self.processPixelBuffer(pixelBuffer)
-                    self.frameCount += 1
-                }
-            }
-        }
+        // Check if there's a new frame available
+        guard playerItemVideoOutput.hasNewPixelBuffer(forItemTime: currentTime),
+              let pixelBuffer = playerItemVideoOutput.copyPixelBuffer(
+                forItemTime: currentTime,
+                itemTimeForDisplay: nil
+              ) else { return }
+        
+        // Process the pixel buffer
+        self.processPixelBuffer(pixelBuffer)
+        self.frameCount += 1
     }
     
     private func processImage(_ cgImage: CGImage) {
@@ -935,7 +886,6 @@ class DetectionManager: NSObject, ObservableObject {
         let imageRequestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         var requests = [VNRequest]()
         
-        // Add requests based on toggle states
         if faceDetectionEnabled {
             requests.append(faceDetectionRequest)
             if faceLandmarksEnabled {
@@ -973,44 +923,55 @@ class DetectionManager: NSObject, ObservableObject {
     }
     
     private func cleanup() {
-        // Stop camera session
         captureSession?.stopRunning()
         captureSession = nil
         
-        // Stop video player
         player?.pause()
         stopVideoProcessingTimer()
         
-        // Remove layers
         videoPreviewLayer?.removeFromSuperlayer()
         playerLayer?.removeFromSuperlayer()
         imageLayer?.removeFromSuperlayer()
+        overlayLayer.removeFromSuperlayer()
         
         videoPreviewLayer = nil
         playerLayer = nil
         imageLayer = nil
         playerItemVideoOutput = nil
+        
+        clearAllDetectionLayers()
+        
+        // Recreate overlay layer for next setup
+        overlayLayer = CALayer()
+        detectionLayers.removeAll()
+    }
+    
+    private func clearAllDetectionLayers() {
+        for (name, _) in detectionLayers {
+            clearLayer(name)
+        }
+    }
+    
+    private func clearAllDetections() {
+        DispatchQueue.main.async {
+            self.clearAllDetectionLayers()
+            self.detectionHistory = []
+            self.recentDetectedObjects = []
+            self.currentDetection = nil
+        }
     }
     
     private func setupVisionRequests() {
-        // Configure face detection
         faceDetectionRequest.revision = VNDetectFaceRectanglesRequestRevision3
         faceLandmarksRequest.revision = VNDetectFaceLandmarksRequestRevision3
-        
-        // Configure hand pose
         handPoseRequest.maximumHandCount = 16
-        
-        // Configure text detection
         textDetectionRequest.recognitionLevel = .fast
         textDetectionRequest.usesLanguageCorrection = true
-        
-        // Configure contours
         contoursRequest.contrastAdjustment = 1.0
         contoursRequest.detectsDarkOnLight = true
     }
     
     private func setupYOLOModels() {
-        // Load YOLOv3
         if let modelURL = Bundle.main.url(forResource: "YOLOv3TinyFP16", withExtension: "mlmodelc") {
             do {
                 let model = try MLModel(contentsOf: modelURL)
@@ -1024,25 +985,74 @@ class DetectionManager: NSObject, ObservableObject {
         }
     }
     
+    // MARK: - Detection Decay Timer
+    
+    private func startDetectionDecayTimer() {
+        detectionDecayTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.updateDetectionHistory()
+        }
+    }
+    
+    private func updateDetectionHistory() {
+        let now = Date()
+        detectionHistory = detectionHistory.filter { now.timeIntervalSince($0.1) <= detectionDecayInterval }
+        
+        let newSet = Set(detectionHistory.map { $0.0 })
+        if newSet != recentDetectedObjects {
+            DispatchQueue.main.async {
+                self.recentDetectedObjects = newSet
+            }
+        }
+    }
+    
     // MARK: - TTS
+    
     func speak(text textToSpeak: String) {
-        // If already speaking, don't interrupt; caller should wait for completion
         if isSpeaking || speechSynth.isSpeaking { return }
-        isSpeaking = true
-
+        
+        DispatchQueue.main.async {
+            self.isSpeaking = true
+        }
+        
         let utterance = AVSpeechUtterance(string: textToSpeak)
-        // Apply preferred voice if available
         utterance.voice = preferredVoice ?? AVSpeechSynthesisVoice(language: "en-US")
-        // Tune rate and pitch to roughly match the previous configuration
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.pitchMultiplier = 0.9
-
+        
         speechSynth.speak(utterance)
+        
+        // Timeout safety in case delegate doesn't fire
+        speechTimeoutTimer?.invalidate()
+        speechTimeoutTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: false) { [weak self] _ in
+            if self?.isSpeaking == true {
+                self?.speechSynth.stopSpeaking(at: .immediate)
+                DispatchQueue.main.async {
+                    self?.isSpeaking = false
+                }
+            }
+        }
     }
-
+    
     func stopSpeaking() {
+        speechTimeoutTimer?.invalidate()
         if speechSynth.isSpeaking {
             speechSynth.stopSpeaking(at: .immediate)
+        }
+        DispatchQueue.main.async {
+            self.isSpeaking = false
+        }
+    }
+    
+    func startWaitingAfterSpeech(duration: TimeInterval) {
+        DispatchQueue.main.async {
+            self.isWaitingAfterSpeech = true
+        }
+        
+        waitTimer?.invalidate()
+        waitTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.isWaitingAfterSpeech = false
+            }
         }
     }
     
@@ -1051,9 +1061,9 @@ class DetectionManager: NSObject, ObservableObject {
     func updateCameraVisibility() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.videoPreviewLayer?.isHidden = !self.showCameraFeed
-            self.playerLayer?.isHidden = !self.showCameraFeed
-            self.imageLayer?.isHidden = !self.showCameraFeed
+            self.videoPreviewLayer?.opacity = self.showCameraFeed ? 1.0 : 0.0
+            self.playerLayer?.opacity = self.showCameraFeed ? 1.0 : 0.0
+            self.imageLayer?.opacity = self.showCameraFeed ? 1.0 : 0.0
         }
     }
     
@@ -1062,25 +1072,21 @@ class DetectionManager: NSObject, ObservableObject {
         updateStatus(isDetecting ? "Detection started" : "Detection stopped")
         
         if !isDetecting {
-            // Clear all detection layers when stopping
-            for (name, _) in detectionLayers {
-                clearLayer(name)
-            }
-            // Clear current detection
-            DispatchQueue.main.async {
-                self.currentDetection = nil
-                self.recentDetectedObjects = []
-                self.detectionHistory = []
-            }
+            clearAllDetections()
+            stopSpeaking()
+            waitTimer?.invalidate()
+            isWaitingAfterSpeech = false
             
-            // Stop video processing when detection stops
             if mediaSourceType == .video {
                 stopVideoProcessingTimer()
             }
         } else {
-            // Start video processing when detection starts and video is playing
+            // Start detection based on media type
             if mediaSourceType == .video && isVideoPlaying {
                 startVideoProcessingTimer()
+                updateStatus("Detecting on video")
+            } else if mediaSourceType == .camera {
+                updateStatus("Detecting on camera")
             }
         }
     }
@@ -1098,7 +1104,6 @@ class DetectionManager: NSObject, ObservableObject {
     private func processPixelBuffer(_ pixelBuffer: CVPixelBuffer) {
         var requests = [VNRequest]()
         
-        // Add requests based on toggle states
         if faceDetectionEnabled {
             requests.append(faceDetectionRequest)
             if faceLandmarksEnabled {
@@ -1126,7 +1131,6 @@ class DetectionManager: NSObject, ObservableObject {
             requests.append(contoursRequest)
         }
         
-        // Perform Vision requests
         if !requests.isEmpty {
             let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
             
@@ -1316,7 +1320,8 @@ class DetectionManager: NSObject, ObservableObject {
             shapeLayer.path = path
             shapeLayer.fillColor = NSColor.clear.cgColor
             shapeLayer.strokeColor = NSColor.systemCyan.cgColor
-            shapeLayer.lineWidth = 3.0
+            shapeLayer.lineWidth = 2.0
+            shapeLayer.opacity = 0.8
             layer.addSublayer(shapeLayer)
             
             self.updateDetectionCount()
@@ -1326,12 +1331,8 @@ class DetectionManager: NSObject, ObservableObject {
     // MARK: - Update Current Detection
     
     private func updateCurrentDetection(_ detection: String) {
-        DispatchQueue.main.async {
-            let now = Date()
-            self.detectionHistory = self.detectionHistory.filter { now.timeIntervalSince($0.1) <= 1.0 }
-            self.detectionHistory.append((detection, now))
-            self.recentDetectedObjects = Set(self.detectionHistory.map { $0.0 })
-        }
+        let now = Date()
+        detectionHistory.append((detection, now))
     }
     
     // MARK: - Coordinate Conversion
@@ -1339,19 +1340,24 @@ class DetectionManager: NSObject, ObservableObject {
     private func convertNormalizedRect(_ rect: CGRect) -> CGRect {
         guard let previewView = previewView else { return .zero }
         
-        let viewFrame = previewView.bounds
-        
-        // For video player or image display, use the full view bounds
+        // For video player or image display, calculate based on actual media resolution
         if mediaSourceType == .video || mediaSourceType == .image {
+            guard let videoDimensions = videoDimensions else { return .zero }
+            
+            let mediaSize = CGSize(width: CGFloat(videoDimensions.width), height: CGFloat(videoDimensions.height))
+            
+            // Calculate the rect where media is actually displayed (respecting aspect ratio)
+            let videoRect = AVMakeRect(aspectRatio: mediaSize, insideRect: previewView.bounds)
+            
             return CGRect(
-                x: rect.minX * viewFrame.width,
-                y: (1 - rect.maxY) * viewFrame.height,
-                width: rect.width * viewFrame.width,
-                height: rect.height * viewFrame.height
+                x: videoRect.minX + rect.minX * videoRect.width,
+                y: videoRect.minY + rect.minY * videoRect.height,
+                width: rect.width * videoRect.width,
+                height: rect.height * videoRect.height
             )
         }
         
-        // For camera, use the preview layer conversion
+        // For camera, use the preview layer conversion which handles aspect ratio
         guard let previewLayer = videoPreviewLayer else { return .zero }
         
         let videoRect = previewLayer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
@@ -1367,13 +1373,18 @@ class DetectionManager: NSObject, ObservableObject {
     private func convertNormalizedPoint(_ point: CGPoint) -> CGPoint {
         guard let previewView = previewView else { return .zero }
         
-        let viewFrame = previewView.bounds
-        
-        // For video player or image display, use the full view bounds
+        // For video player or image display, calculate based on actual media resolution
         if mediaSourceType == .video || mediaSourceType == .image {
+            guard let videoDimensions = videoDimensions else { return .zero }
+            
+            let mediaSize = CGSize(width: CGFloat(videoDimensions.width), height: CGFloat(videoDimensions.height))
+            
+            // Calculate the rect where media is actually displayed (respecting aspect ratio)
+            let videoRect = AVMakeRect(aspectRatio: mediaSize, insideRect: previewView.bounds)
+            
             return CGPoint(
-                x: point.x * viewFrame.width,
-                y: (1 - point.y) * viewFrame.height
+                x: videoRect.minX + point.x * videoRect.width,
+                y: videoRect.minY + point.y * videoRect.height
             )
         }
         
@@ -1408,23 +1419,23 @@ class DetectionManager: NSObject, ObservableObject {
         let box = CALayer()
         box.frame = convertedRect
         box.borderColor = color.cgColor
-        box.borderWidth = 2.0
+        box.borderWidth = 3.0
         box.cornerRadius = 4.0
-        box.backgroundColor = color.withAlphaComponent(0.1).cgColor
+        box.backgroundColor = color.withAlphaComponent(0.2).cgColor
         layer.addSublayer(box)
         
         if let label = label {
             let textLayer = CATextLayer()
             textLayer.string = label
-            textLayer.fontSize = 12
+            textLayer.fontSize = 14
             textLayer.foregroundColor = NSColor.white.cgColor
-            textLayer.backgroundColor = color.withAlphaComponent(0.7).cgColor
+            textLayer.backgroundColor = color.withAlphaComponent(0.8).cgColor
             textLayer.alignmentMode = .center
-            textLayer.contentsScale = 2.0
+            textLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
             
-            let size = label.size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)])
-            textLayer.frame = CGRect(x: convertedRect.minX, y: convertedRect.minY - size.height - 2,
-                                    width: size.width + 10, height: size.height + 4)
+            let size = label.size(withAttributes: [.font: NSFont.systemFont(ofSize: 14)])
+            textLayer.frame = CGRect(x: convertedRect.minX, y: convertedRect.minY - size.height - 4,
+                                    width: size.width + 12, height: size.height + 6)
             layer.addSublayer(textLayer)
         }
     }
@@ -1459,24 +1470,24 @@ class DetectionManager: NSObject, ObservableObject {
             shapeLayer.path = path
             shapeLayer.fillColor = NSColor.clear.cgColor
             shapeLayer.strokeColor = NSColor.systemRed.cgColor
-            shapeLayer.lineWidth = 1.0
+            shapeLayer.lineWidth = 2.0
             layer.addSublayer(shapeLayer)
         }
     }
     
     private func drawHandSkeleton(_ points: [VNHumanHandPoseObservation.JointName : VNRecognizedPoint], in layer: CALayer) {
-        // Draw joints
         for (_, point) in points where point.confidence > 0.3 {
             let cgPoint = convertNormalizedPoint(CGPoint(x: point.location.x, y: point.location.y))
             
             let circle = CALayer()
-            circle.frame = CGRect(x: cgPoint.x - 3, y: cgPoint.y - 3, width: 6, height: 6)
+            circle.frame = CGRect(x: cgPoint.x - 4, y: cgPoint.y - 4, width: 8, height: 8)
             circle.backgroundColor = NSColor.systemOrange.cgColor
-            circle.cornerRadius = 3
+            circle.cornerRadius = 4
+            circle.borderColor = NSColor.white.cgColor
+            circle.borderWidth = 1
             layer.addSublayer(circle)
         }
         
-        // Draw connections
         let connections: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
             (.wrist, .thumbCMC), (.thumbCMC, .thumbMP), (.thumbMP, .thumbIP), (.thumbIP, .thumbTip),
             (.wrist, .indexMCP), (.indexMCP, .indexPIP), (.indexPIP, .indexDIP), (.indexDIP, .indexTip),
@@ -1496,25 +1507,25 @@ class DetectionManager: NSObject, ObservableObject {
                 let line = CAShapeLayer()
                 line.path = path
                 line.strokeColor = NSColor.systemOrange.cgColor
-                line.lineWidth = 1.5
+                line.lineWidth = 2.5
                 layer.addSublayer(line)
             }
         }
     }
     
     private func drawBodySkeleton(_ points: [VNHumanBodyPoseObservation.JointName : VNRecognizedPoint], in layer: CALayer) {
-        // Draw joints
         for (_, point) in points where point.confidence > 0.3 {
             let cgPoint = convertNormalizedPoint(CGPoint(x: point.location.x, y: point.location.y))
             
             let circle = CALayer()
-            circle.frame = CGRect(x: cgPoint.x - 4, y: cgPoint.y - 4, width: 8, height: 8)
+            circle.frame = CGRect(x: cgPoint.x - 5, y: cgPoint.y - 5, width: 10, height: 10)
             circle.backgroundColor = NSColor.systemPurple.cgColor
-            circle.cornerRadius = 4
+            circle.cornerRadius = 5
+            circle.borderColor = NSColor.white.cgColor
+            circle.borderWidth = 1
             layer.addSublayer(circle)
         }
         
-        // Draw skeleton
         let connections: [(VNHumanBodyPoseObservation.JointName, VNHumanBodyPoseObservation.JointName)] = [
             (.nose, .neck), (.neck, .leftShoulder), (.neck, .rightShoulder),
             (.leftShoulder, .leftElbow), (.leftElbow, .leftWrist),
@@ -1535,7 +1546,7 @@ class DetectionManager: NSObject, ObservableObject {
                 let line = CAShapeLayer()
                 line.path = path
                 line.strokeColor = NSColor.systemPurple.cgColor
-                line.lineWidth = 2.0
+                line.lineWidth = 3.0
                 layer.addSublayer(line)
             }
         }
@@ -1587,6 +1598,14 @@ extension DetectionManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 // MARK: - AVSpeechSynthesizerDelegate
 extension DetectionManager: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        speechTimeoutTimer?.invalidate()
+        DispatchQueue.main.async { [weak self] in
+            self?.isSpeaking = false
+        }
+    }
+    
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        speechTimeoutTimer?.invalidate()
         DispatchQueue.main.async { [weak self] in
             self?.isSpeaking = false
         }
