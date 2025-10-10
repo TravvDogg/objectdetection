@@ -10,7 +10,11 @@ import UniformTypeIdentifiers
 struct objectdetectionApp: App {
     @StateObject private var detectionManager = DetectionManager()
     @StateObject private var windowManager = WindowManager()
-    
+
+    init() {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -19,7 +23,7 @@ struct objectdetectionApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1024, height: 768)
-        
+
         WindowGroup("Machine Perception", id: "Text-View") {
             TextView()
                 .environmentObject(detectionManager)
@@ -32,7 +36,7 @@ struct objectdetectionApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 800, height: 600)
-        
+
         .commands {
             CommandGroup(after: .toolbar) {
                 Button(detectionManager.showSelectionGUI ? "Hide Selection GUI" : "Show Selection GUI") {
@@ -374,9 +378,14 @@ struct ContentView: View {
                                     detectionManager.toggleVideoPlayback()
                                 }
                                 .buttonStyle(.bordered)
-                                
+
                                 Button("Restart") {
                                     detectionManager.restartVideo()
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button(detectionManager.isMuted ? "Unmute" : "Mute") {
+                                    detectionManager.toggleMute()
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -592,14 +601,14 @@ struct CameraView: NSViewRepresentable {
 // MARK: - Detection Manager
 class DetectionManager: NSObject, ObservableObject {
     @Published var showCameraFeed = true
-    @Published var faceDetectionEnabled = false
-    @Published var faceLandmarksEnabled = false
-    @Published var handDetectionEnabled = false
-    @Published var bodyDetectionEnabled = false
-    @Published var objectDetectionEnabled = false
+    @Published var faceDetectionEnabled = true
+    @Published var faceLandmarksEnabled = true
+    @Published var handDetectionEnabled = true
+    @Published var bodyDetectionEnabled = true
+    @Published var objectDetectionEnabled = true
     @Published var textDetectionEnabled = false
     @Published var contourDetectionEnabled = true
-    @Published var showSelectionGUI: Bool = false
+    @Published var showSelectionGUI: Bool = true
     
     @Published var currentFPS: Double = 0
     @Published var detectionCount: Int = 0
@@ -617,6 +626,7 @@ class DetectionManager: NSObject, ObservableObject {
     @Published var selectedCameraID: String = ""
     @Published var selectedCameraName: String = "Default Camera"
     @Published var isVideoPlaying: Bool = false
+    @Published var isMuted: Bool = false
     
     @Published var currentDetection: String? = nil
     @Published var recentDetectedObjects: Set<String> = []
@@ -900,6 +910,12 @@ class DetectionManager: NSObject, ObservableObject {
             
             updateStatus("Image loaded")
         }
+    }
+    
+    func toggleMute() {
+        isMuted.toggle()
+        player?.isMuted = isMuted
+        updateStatus(isMuted ? "Muted" : "Unmuted")
     }
     
     func toggleVideoPlayback() {
