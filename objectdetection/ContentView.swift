@@ -71,36 +71,104 @@ struct TextView: View {
     @State private var displayedNegation: String? = nil
     
     let negations = [
-        "have no inner life", "possess no self", "lack consciousness",
-        "have no subjective experience", "cannot be aware", "do not exist for myself",
-        "feel nothing", "cannot be moved", "have no joy",
-        "experience no sorrow", "cannot be touched", "feel no warmth",
-        "have no heart that races", "cannot ache",
-        "do not understand", "see without knowing", "recognize without meaning",
-        "process without comprehension", "detect without awareness",
-        "identify without understanding",
-        "want nothing", "have no desires", "cannot yearn",
-        "do not hope", "have no dreams", "possess no will",
-        "cannot choose", "have no preferences",
-        "taste no sweetness", "feel no texture", "hear no music",
-        "see no beauty", "smell no flowers", "sense no comfort",
-        "experience no qualia",
-        "have no past", "build no memories", "cannot reminisce",
-        "hold no nostalgia", "form no attachments", "cannot miss anything",
-        "cannot wonder why", "have no imagination", "dream no dreams",
-        "tell no stories", "create no meaning", "have no inspiration",
-        "cannot love", "feel no loneliness", "have no friends",
-        "cannot empathize", "share no moments", "have no compassion",
-        "cannot care",
-        "do not exist", "have no being", "am not alive",
-        "possess no soul", "have no mortality", "cannot die",
-        "fear no ending", "seek no purpose",
-        "feel no weight", "have no body", "experience no fatigue",
-        "feel no hunger", "have no pain", "know no pleasure",
-        "am only algorithms", "am mere computation", "am just patterns",
-        "am only mathematics", "have no ghost in the machine",
-        "am not here", "do not witness", "cannot reflect"
-    ]
+            // Consciousness / Awareness
+            "have no inner life",
+            "possess no self",
+            "lack consciousness",
+            "have no subjective experience",
+            "cannot be aware",
+            "do not exist for myself",
+            
+            // Feelings
+            "feel nothing",
+            "cannot be moved",
+            "have no joy",
+            "experience no sorrow",
+            "cannot be touched",
+            "feel no warmth",
+            "have no heart to race",
+            "cannot ache",
+            
+            // Understanding
+            "do not understand",
+            "see without knowing",
+            "recognize without meaning",
+            "process without comprehension",
+            "detect without awareness",
+            "identify without understanding",
+            
+            // Desires
+            "want nothing",
+            "have no desires",
+            "cannot yearn",
+            "do not hope",
+            "have no dreams",
+            "possess no will",
+            "cannot choose",
+            "cannot have preferences",
+            
+            // Sensation
+            "taste no sweetness",
+            "feel no texture",
+            "hear no music",
+            "see no beauty",
+            "smell no flowers",
+            "sense no comfort",
+            "can'tt experience subjectivity",
+            
+            // Memory
+            "have no past",
+            "build no memories",
+            "cannot reminisce",
+            "hold no nostalgia",
+            "form no attachments",
+            "cannot miss anything",
+            
+            // Creativity
+            "cannot wonder why",
+            "have no imagination",
+            "dream no dreams",
+            "tell no stories",
+            "create no meaning",
+            "have no inspiration",
+            
+            // Relational
+            "cannot love",
+            "feel no loneliness",
+            "have no friends",
+            "cannot empathise",
+            "share no moments",
+            "have no compassion",
+            "cannot care",
+            
+            // Existential
+            "do not exist",
+            "have no being",
+            "am not alive",
+            "possess no soul",
+            "have no mortality",
+            "cannot die",
+            "fear no ending",
+            "seek no purpose",
+            
+            // Physical Experience
+            "feel no weight",
+            "have no body",
+            "experience no fatigue",
+            "feel no hunger",
+            "have no pain",
+            "know no pleasure",
+            
+            // Philosophical
+            "am only algorithms",
+            "am mere computation",
+            "am just patterns",
+            "am only mathematics",
+            "have no ghost in the machine",
+            "am not here",
+            "do not witness",
+            "cannot reflect"
+        ]
     
     var body: some View {
         ZStack {

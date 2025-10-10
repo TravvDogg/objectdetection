@@ -14,13 +14,12 @@ Dependencies:
 
 Run with:
   sudo -v && python3 tui_sonifier.py
+  
 
 Keys:
   q quit
   m mute/unmute
-  +/- volume
   f toggle linear/log frequency mapping
-  r cycle audible cores
 """
 import asyncio
 import math
@@ -46,6 +45,7 @@ CHUNK = 256
 BASE_FREQ = 80.0
 FREQ_SPAN = 2260.0
 MAX_AUDIBLE_CORES = 12
+DEFAULT_VOLUME = 0.1
 
 RE_THERMAL = re.compile(r"Thermal Pressure:\s*(\w+)", re.IGNORECASE)
 RE_E_FREQ = re.compile(r"E-Cluster\s+frequency:\s*(\d+(?:\.\d+)?)\s*MHz", re.IGNORECASE)
@@ -99,7 +99,7 @@ def read_gpu_utilisation(timeout: float = 1.5) -> Optional[float]:
 class CoreSynth:
     def __init__(self):
         self.sr = AUDIO_SR
-        self.master = 0.1
+        self.master = DEFAULT_VOLUME
         self.enabled = True
         self.lock = threading.Lock()
         self.phase = {}
@@ -129,13 +129,16 @@ class CoreSynth:
         with self.lock:
             self.distortion_drive = max(1.0, min(drive, 8.0))
 
-    def update_from_util(self, utils):
+    def update_from_util(self, utils, log_mapping=True):
         with self.lock:
             for i in range(len(utils)):
                 u = utils[i]
                 frac = max(0.0, min(1.0, u / 100.0))
-                # Logarithmic frequency mapping for drone-like sound
-                freq_target = BASE_FREQ * (2 ** (frac * 3))  # Up to 8x base freq
+                if log_mapping:
+                    # Logarithmic frequency mapping for drone-like sound
+                    freq_target = BASE_FREQ * (2 ** (frac * 3))  # Up to 8x base freq
+                else:
+                    freq_target = BASE_FREQ + FREQ_SPAN * frac
                 amp_target = 0.1 + 0.4 * frac
                 prev_freq, prev_amp = self.core_params.get(i, (freq_target, amp_target))
                 freq = 0.85 * prev_freq + 0.15 * freq_target
@@ -186,24 +189,23 @@ class CoreSonifierApp(App):
         super().__init__()
         self.cpu_count = psutil.cpu_count(logical=True) or 1
         self.bars: List[MetricBar] = []
-        self.gpu_bar = MetricBar()
-        self.freq_label = TextLabel()
-        self.therm_label = TextLabel()
         self.status = TextLabel()
         self.synth = CoreSynth()
+        self.log_mapping = True
 
     def compose(self) -> ComposeResult:
         with Container(id="root"):
-            yield Static("CPU/GPU Visualiser + Audio (q quit, m mute, +/- vol, f map, r cores)")
+            yield Static("CPU/GPU Visualiser + Audio (q quit, m mute, f map)")
             for i in range(self.cpu_count):
-                bar = MetricBar()
-                bar.label = f"Core {i:02d}"
-                self.bars.append(bar)
-                yield bar
-            self.gpu_bar.label = "GPU"
-            yield self.gpu_bar
-            yield self.freq_label
-            yield self.therm_label
+                if i not in (0, 1):
+                    bar = MetricBar()
+                    bar.label = f"Core {i:02d}"
+                    self.bars.append(bar)
+                    yield bar
+            # self.gpu_bar.label = "GPU"
+            # yield self.gpu_bar
+            # yield self.freq_label
+            # yield self.therm_label
             yield self.status
 
     async def on_mount(self):
@@ -211,39 +213,40 @@ class CoreSonifierApp(App):
 
     async def _tick(self):
         utils = psutil.cpu_percent(interval=None, percpu=True)
-        for i, u in enumerate(utils):
-            self.bars[i].value = u / 100
-        self.synth.update_from_util(utils)
-        gpu_util = await asyncio.to_thread(read_gpu_utilisation)
-        if gpu_util is not None:
-            # Map ~0-1000 mW to 0-100%
-            frac = min(1.0, gpu_util / 1000.0)
-            self.gpu_bar.value = frac
-        sample = await asyncio.to_thread(read_powermetrics_once)
-        therm = sample.thermal or "Unknown"
-        # 🔥 Map thermal pressure to distortion
-        drive_map = {
-            "Nominal": 1.0,
-            "Light": 1.5,
-            "Moderate": 2.5,
-            "Heavy": 4.0,
-            "Trapping": 6.0
-        }
-        drive = drive_map.get(sample.thermal, 1.0)
-        self.synth.set_distortion(drive)
-        self.freq_label.text = f"Clusters: E {sample.e_mhz or 0:.0f} MHz | P {sample.p_mhz or 0:.0f} MHz"
-        self.therm_label.text = f"Thermal Pressure: {therm}"
-        self.status.text = f"Audio {'ON' if self.synth.enabled else 'MUTED'} | Vol {self.synth.master:.2f}"
+        core_indices = [i for i in range(len(utils)) if i not in (0, 1)]
+        filtered_utils = [utils[i] for i in core_indices]
+        for bar, u in zip(self.bars, filtered_utils):
+            bar.value = u / 100
+        self.synth.update_from_util(filtered_utils, log_mapping=self.log_mapping)
+        # gpu_util = await asyncio.to_thread(read_gpu_utilisation)
+        # if gpu_util is not None:
+        #     # Map ~0-1000 mW to 0-100%
+        #     frac = min(1.0, gpu_util / 1000.0)
+        #     self.gpu_bar.value = frac
+        # sample = await asyncio.to_thread(read_powermetrics_once)
+        # therm = sample.thermal or "Unknown"
+        # # 🔥 Map thermal pressure to distortion
+        # drive_map = {
+        #     "Nominal": 1.0,
+        #     "Light": 1.5,
+        #     "Moderate": 2.5,
+        #     "Heavy": 4.0,
+        #     "Trapping": 6.0
+        # }
+        # drive = drive_map.get(sample.thermal, 1.0)
+        self.synth.set_distortion(1.0)
+        # self.freq_label.text = f"Clusters: E {sample.e_mhz or 0:.0f} MHz | P {sample.p_mhz or 0:.0f} MHz"
+        # self.therm_label.text = f"Thermal Pressure: {therm}"
+        mapping_str = "LOG" if self.log_mapping else "LIN"
+        self.status.text = f"Audio {'ON' if self.synth.enabled else 'MUTED'} | Vol {self.synth.master:.2f} | Mapping: {mapping_str}"
 
     async def on_key(self, event: events.Key):
         if event.key == 'q':
             await self.action_quit()
         elif event.key == 'm':
             self.synth.toggle_enable()
-        elif event.key == '+':
-            self.synth.set_master(self.synth.master + 0.05)
-        elif event.key == '-':
-            self.synth.set_master(self.synth.master - 0.05)
+        elif event.key == 'f':
+            self.log_mapping = not self.log_mapping
 
     async def on_unmount(self):
         self.synth.close()
