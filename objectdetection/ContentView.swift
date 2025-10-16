@@ -68,6 +68,13 @@ enum MediaSourceType {
     case image
 }
 
+// MARK: - Media Feed Mode
+enum MediaFeedMode: String, CaseIterable, Hashable {
+    case on
+    case off
+    case alternating
+}
+
 // MARK: - text View
 struct TextView: View {
     @EnvironmentObject private var detectionManager: DetectionManager
@@ -399,10 +406,13 @@ struct ContentView: View {
                         .font(.headline)
                     
                     VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Show Media Feed", isOn: $detectionManager.showCameraFeed)
-                            .onChange(of: detectionManager.showCameraFeed) { _ in
-                                detectionManager.updateCameraVisibility()
-                            }
+                        Picker("Media Feed", selection: $detectionManager.mediaFeedMode) {
+                            Text("On").tag(MediaFeedMode.on)
+                            Text("Off").tag(MediaFeedMode.off)
+                            Text("Alternate (10s)").tag(MediaFeedMode.alternating)
+                        }
+                        .pickerStyle(.menu)
+                        .help("Choose how the media feed is shown. Alternate toggles every 10 seconds.")
                         
                         Divider()
                         
@@ -609,6 +619,9 @@ class DetectionManager: NSObject, ObservableObject {
     @Published var textDetectionEnabled = false
     @Published var contourDetectionEnabled = true
     @Published var showSelectionGUI: Bool = true
+    @Published var mediaFeedMode: MediaFeedMode = .on {
+        didSet { applyMediaFeedMode() }
+    }
     
     @Published var currentFPS: Double = 0
     @Published var detectionCount: Int = 0
@@ -621,6 +634,7 @@ class DetectionManager: NSObject, ObservableObject {
     private var preferredVoice: AVSpeechSynthesisVoice? = nil
     private var speechTimeoutTimer: Timer?
     private var waitTimer: Timer?
+    private var mediaFeedTimer: Timer?
     
     @Published var mediaSourceType: MediaSourceType = .camera
     @Published var selectedCameraID: String = ""
@@ -675,6 +689,7 @@ class DetectionManager: NSObject, ObservableObject {
         startFPSTimer()
         setupDefaultCamera()
         startDetectionDecayTimer()
+        applyMediaFeedMode()
         
         speechSynth.delegate = self
         preferredVoice = AVSpeechSynthesisVoice.speechVoices().first(where: { $0.name.localizedCaseInsensitiveContains("Ralph") })
@@ -686,6 +701,7 @@ class DetectionManager: NSObject, ObservableObject {
         detectionDecayTimer?.invalidate()
         speechTimeoutTimer?.invalidate()
         waitTimer?.invalidate()
+        mediaFeedTimer?.invalidate()
     }
     
     // MARK: - Setup Methods
@@ -1137,6 +1153,42 @@ class DetectionManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self?.isWaitingAfterSpeech = false
             }
+        }
+    }
+    
+    // MARK: - Media Feed Mode Control
+    private func applyMediaFeedMode() {
+        // Stop any existing timer
+        mediaFeedTimer?.invalidate()
+        mediaFeedTimer = nil
+
+        switch mediaFeedMode {
+        case .on:
+            showCameraFeed = true
+            updateCameraVisibility()
+        case .off:
+            showCameraFeed = false
+            updateCameraVisibility()
+        case .alternating:
+            // Start alternating every 10 seconds
+            startMediaFeedAlternatingTimer()
+        }
+    }
+    
+    private func startMediaFeedAlternatingTimer() {
+        mediaFeedTimer?.invalidate()
+
+        // Start with showing the feed
+        showCameraFeed = true
+        updateCameraVisibility()
+
+        mediaFeedTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            self.showCameraFeed.toggle()
+            self.updateCameraVisibility()
+        }
+        if let timer = mediaFeedTimer {
+            RunLoop.main.add(timer, forMode: .common)
         }
     }
     
